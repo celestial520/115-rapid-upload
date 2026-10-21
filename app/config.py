@@ -8,6 +8,20 @@ from pathlib import Path
 from typing import Any, Dict
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/config"))
+
+_logger = None
+
+
+def _log():
+    """延迟导入，避免循环依赖"""
+    global _logger
+    if _logger is None:
+        from .logger import get_logger
+
+        _logger = get_logger()
+    return _logger
+
+
 SETTINGS_FILE = DATA_DIR / "settings.json"
 STATE_FILE = DATA_DIR / "state.json"
 TOKEN_FILE = DATA_DIR / "115_token.json"
@@ -99,7 +113,7 @@ def load_settings() -> Dict[str, Any]:
                             }
                         ]
             except Exception as err:  # 配置坏了就用默认值，别让服务起不来
-                print(f"[config] 读取配置失败，使用默认值：{err}")
+                _log().warning(f"读取配置失败，使用默认值：{err}")
         _settings = merged
         return merged
 
@@ -144,7 +158,7 @@ def load_state() -> Dict[str, Any]:
             if isinstance(raw, dict):
                 return raw
         except Exception as err:
-            print(f"[config] 读取状态失败：{err}")
+            _log().warning(f"读取状态失败：{err}")
     return {}
 
 

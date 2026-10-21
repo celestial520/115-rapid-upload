@@ -10,7 +10,12 @@ from typing import Any, Dict, List, Optional
 import qrcode
 import qrcode.image.svg
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+
+from .logger import LOG_FILE, get_logger, setup_logging, tail as log_tail
+
+setup_logging()
+logger = get_logger()
 
 from .auth import COOKIE_NAME, SESSION_TTL, Auth
 from .config import DATA_DIR, DEFAULTS, ensure_api_key, get_settings, load_settings, save_settings
@@ -68,7 +73,9 @@ def api_login(payload: Dict[str, Any] = Body(...)) -> Response:
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
     if not auth.verify(username, password):
+        logger.warning(f"网页登录失败：{username or '(空)'}")
         raise HTTPException(status_code=401, detail="账号或密码不正确")
+    logger.info(f"网页登录成功：{username}")
     token = auth.issue_token(username)
     response = JSONResponse({"ok": True, "username": username})
     response.set_cookie(
@@ -133,6 +140,7 @@ def api_apikey_reset() -> Dict[str, Any]:
 
     new_key = secrets.token_hex(24)
     save_settings({"api_key": new_key})
+    logger.warning("外部触发 API Key 已重置（MP 插件需同步修改）")
     return {"ok": True, "api_key": new_key}
 
 
@@ -215,6 +223,11 @@ def api_trigger(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[s
             worker._forced_src[f.as_posix()] = "mp"
             accepted.append(f.as_posix())
 
+    logger.info(
+        f"外部触发（MP）：收到 {len(raw_paths)} 个路径，接受 {len(accepted)}，跳过 {len(skipped)}"
+    )
+    for item in skipped[:5]:
+        logger.info(f"外部触发跳过：{item.get('path')} —— {item.get('reason')}")
     return {
         "ok": True,
         "accepted": len(accepted),
@@ -257,6 +270,16 @@ def api_health() -> Dict[str, Any]:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    cfg = get_settings()
+    tasks = cfg.get("tasks") or []
+    logger.info(
+        "115秒传助手启动：数据目录=%s，任务 %d 个，日志=%s"
+        % (DATA_DIR, len(tasks), LOG_FILE)
+    )
+    if not tasks:
+        logger.warning("还没有配置监控任务，请到网页「设置 → 监控任务」添加")
+    if not client.is_authorized():
+        logger.warning("115 尚未授权，请到网页扫码登录")
     worker.start()
 
 
@@ -351,6 +374,18 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     save_settings(payload)
     worker.last_error = ""
     worker.refresh_watcher()   # 监控目录/模式可能变了
+    cfg = get_settings()
+    tasks = cfg.get("tasks") or []
+    logger.info(
+        "设置已保存：任务 %d 个（启用 %d），文件事件=%s，每日扫描=%s %s"
+        % (
+            len(tasks),
+            len([t for t in tasks if t.get("enabled", True)]),
+            "开" if cfg.get("watch_events_enabled", True) else "关",
+            "开" if cfg.get("daily_scan_enabled", True) else "关",
+            cfg.get("daily_scan_time") or "",
+        )
+    )
     return {"ok": True, "settings": api_settings()["settings"]}
 
 
@@ -358,6 +393,7 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def api_run(force: bool = Query(True)) -> Dict[str, Any]:
     if not client.is_authorized():
         raise HTTPException(status_code=400, detail="115 未授权，请先扫码登录")
+    logger.info(f"手动触发扫描（跳过静置={bool(force)}）")
     results = worker.run_once(skip_stable=not bool(force), source="manual")
     return {"ok": True, "count": len(results), "results": results}
 
@@ -390,7 +426,10 @@ def api_qrcode() -> Dict[str, Any]:
 @app.get("/api/115/qrcode/status")
 def api_qrcode_status() -> Dict[str, Any]:
     try:
-        return {"ok": True, **client.qr_status()}
+        result = client.qr_status()
+        if result.get("status") == 2:
+            logger.info("115 扫码授权成功")
+        return {"ok": True, **result}
     except U115Error as err:
         raise HTTPException(status_code=400, detail=str(err))
 
@@ -464,6 +503,28 @@ def _read_mounts(proc_path: str = "/proc/self/mountinfo") -> List[Dict[str, str]
         result.append({"path": mount_point, "fstype": fstype, "source": source})
     result.sort(key=lambda x: x["path"])
     return result
+
+
+@app.get("/api/logs")
+def api_logs(
+    lines: int = Query(200, ge=20, le=2000),
+    keyword: str = Query("", description="按关键字过滤，例如 ERROR"),
+) -> Dict[str, Any]:
+    size = LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
+    return {
+        "content": log_tail(lines, keyword),
+        "file": str(LOG_FILE),
+        "size": size,
+    }
+
+
+@app.get("/api/logs/download")
+def api_logs_download():
+    if not LOG_FILE.exists():
+        raise HTTPException(status_code=404, detail="日志文件还没有生成")
+    return FileResponse(
+        LOG_FILE, filename="115-rapid-assistant.log", media_type="text/plain"
+    )
 
 
 @app.get("/api/mounts")

@@ -61,6 +61,11 @@
   .dirlist div:last-child{border-bottom:none}
   .dirlist div:hover{background:#f8fafc}
   .muted{color:var(--muted);font-size:12px}
+  #logBox{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px;font-size:12px;
+          line-height:1.55;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all;
+          font-family:ui-monospace,Consolas,Menlo,monospace;margin:0}
+  .logbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .logbar select,.logbar input{padding:7px 9px;border:1px solid var(--line);border-radius:8px;font:inherit}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
   .chip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;
         background:#f8fafc;cursor:pointer;color:var(--text)}
@@ -106,6 +111,7 @@
   <div class="tabs">
     <button id="tabFiles" class="on">文件状态</button>
     <button id="tabSet">设置</button>
+    <button id="tabLog">日志</button>
   </div>
 
   <div class="panel" id="panelFiles">
@@ -120,6 +126,22 @@
     <div style="margin-top:14px;display:flex;gap:8px">
       <button id="btnReset">清空处理记录</button>
     </div>
+  </div>
+
+  <div class="panel" id="panelLog" style="display:none">
+    <div class="logbar">
+      <select id="logLines">
+        <option value="200">最近 200 行</option>
+        <option value="500">最近 500 行</option>
+        <option value="1000">最近 1000 行</option>
+        <option value="2000">最近 2000 行</option>
+      </select>
+      <input type="text" id="logKeyword" placeholder="关键字过滤，如 ERROR、秒传、外部触发">
+      <button type="button" id="btnLogRefresh">刷新</button>
+      <button type="button" id="btnLogDownload">下载完整日志</button>
+      <span id="logTip" class="muted"></span>
+    </div>
+    <pre id="logBox">点「刷新」加载日志</pre>
   </div>
 
   <div class="panel" id="panelSet" style="display:none">
@@ -612,10 +634,41 @@ $('btnReset').onclick = async () => {
   refresh();
 };
 
-$('tabFiles').onclick = () => { $('tabFiles').classList.add('on'); $('tabSet').classList.remove('on');
-  $('panelFiles').style.display=''; $('panelSet').style.display='none'; };
-$('tabSet').onclick = () => { $('tabSet').classList.add('on'); $('tabFiles').classList.remove('on');
-  $('panelSet').style.display=''; $('panelFiles').style.display='none'; loadSettings(); };
+function showTab(name){
+  ['Files','Set','Log'].forEach(t => {
+    $(`tab${t}`).classList.toggle('on', t === name);
+    $(`panel${t}`).style.display = (t === name) ? '' : 'none';
+  });
+  if(name === 'Set') loadSettings();
+  if(name === 'Log') loadLogs();
+}
+$('tabFiles').onclick = () => showTab('Files');
+$('tabSet').onclick = () => showTab('Set');
+$('tabLog').onclick = () => showTab('Log');
+
+// ---------------- 日志 ----------------
+async function loadLogs(){
+  const lines = $('logLines').value;
+  const keyword = $('logKeyword').value.trim();
+  try{
+    const r = await api(`/api/logs?lines=${encodeURIComponent(lines)}&keyword=${encodeURIComponent(keyword)}`);
+    const box = $('logBox');
+    box.textContent = r.content || '（日志为空）';
+    box.scrollTop = box.scrollHeight;
+    $('logTip').textContent = r.size ? `文件 ${(r.size/1024).toFixed(1)} KB · ${r.file}` : '';
+  }catch(e){
+    $('logBox').textContent = '读取日志失败：' + e.message;
+  }
+}
+$('btnLogRefresh').onclick = loadLogs;
+$('btnLogDownload').onclick = () => { location.href = '/api/logs/download'; };
+$('logLines').onchange = loadLogs;
+$('logKeyword').onkeydown = (e) => { if(e.key === 'Enter') loadLogs(); };
+
+// 停在日志页时每 5 秒自动刷新
+setInterval(() => {
+  if($('panelLog') && $('panelLog').style.display !== 'none') loadLogs();
+}, 5000);
 
 // ---- 扫码登录 ----
 let qrTimer = null;

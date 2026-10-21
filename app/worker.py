@@ -12,8 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from .config import get_settings, load_state, save_state
+from .logger import get_logger
 from .notify import notify_batch
 from .u115 import U115Client, U115Error
+
+logger = get_logger()
 
 CHUNK = 4 * 1024 * 1024
 PREID_SIZE = 128 * 1024 * 1024
@@ -119,13 +122,13 @@ class Worker:
                         for src, buckets in groups.items():
                             label = "下载器完成" if src == "tr" else "MP 整理完成"
                             detail = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
-                            print(f"[worker] {label}，立即处理 {detail}")
+                            logger.info(f"[worker] {label}，立即处理 {detail}")
                             self.run_once(skip_stable=True, event_files=buckets, source=src)
                     self._maybe_daily_scan(cfg)
                     self._maybe_cleanup(cfg)
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
-                print(f"[worker] 本轮出错：{err}")
+                logger.warning(f"[worker] 本轮出错：{err}")
             self._stop.wait(2)
 
     def _maybe_daily_scan(self, cfg: Dict[str, Any]) -> None:
@@ -147,9 +150,9 @@ class Worker:
             return
         self.state["last_daily_scan"] = today_key
         self._persist()
-        print(f"[worker] 每日定时扫描开始（{cfg.get('daily_scan_time')}）")
+        logger.info(f"[worker] 每日定时扫描开始（{cfg.get('daily_scan_time')}）")
         results = self.run_once(source="daily")
-        print(f"[worker] 每日定时扫描结束，处理 {len(results)} 个文件")
+        logger.info(f"[worker] 每日定时扫描结束，处理 {len(results)} 个文件")
 
     # ---------------------------------------------------------------- 文件系统事件
 
@@ -169,7 +172,7 @@ class Worker:
             import watchfiles  # noqa: F401
         except Exception as err:
             self.event_state["error"] = f"watchfiles 不可用，已退化为定时扫描：{err}"
-            print(f"[worker] {self.event_state['error']}")
+            logger.warning(f"[worker] {self.event_state['error']}")
             return
         dirs = [str(t.get("watch_dir")) for t in self._enabled_tasks(cfg) if t.get("watch_dir")]
         dirs = [d for d in dirs if Path(d).expanduser().is_dir()]
@@ -201,12 +204,12 @@ class Worker:
                     self.event_state["count"] = int(self.event_state.get("count") or 0) + 1
             except Exception as err:
                 self.event_state["error"] = f"监听线程退出：{err}"
-                print(f"[worker] {self.event_state['error']}")
+                logger.warning(f"[worker] {self.event_state['error']}")
 
         self._watch_thread = threading.Thread(target=_loop, name="watcher", daemon=True)
         self._watch_thread.start()
         self.event_state["dirs"] = dirs
-        print(f"[worker] 已启动文件系统监听：{dirs}")
+        logger.info(f"[worker] 已启动文件系统监听：{dirs}")
 
     def refresh_watcher(self) -> None:
         """
@@ -362,7 +365,7 @@ class Worker:
             if results:
                 for err in notify_batch(results):
                     self.last_error = err
-                    print(f"[worker] 通知失败：{err}")
+                    logger.warning(f"[worker] 通知失败：{err}")
         finally:
             self.running_scan = False
         return results
@@ -524,7 +527,7 @@ class Worker:
             path.unlink()
             return True
         except Exception as err:
-            print(f"[worker] 删除源文件失败：{path} - {err}")
+            logger.warning(f"[worker] 删除源文件失败：{path} - {err}")
             return False
 
     # ---------------------------------------------------------------- 工具
@@ -632,13 +635,13 @@ class Worker:
                     self._poll_transmission()
                 except Exception as err:
                     self.tr_state["error"] = str(err)
-                    print(f"[worker] 查询下载器出错：{err}")
+                    logger.warning(f"[worker] 查询下载器出错：{err}")
                 interval = max(5, int(get_settings().get("tr_poll_sec") or 30))
                 self._poll_stop.wait(interval)
 
         self._poll_thread = threading.Thread(target=_loop, name="tr-poller", daemon=True)
         self._poll_thread.start()
-        print(f"[worker] 已启动下载器监控：{cfg.get('tr_url')}")
+        logger.info(f"[worker] 已启动下载器监控：{cfg.get('tr_url')}")
 
     def _stop_poller(self) -> None:
         if self._poll_stop:
@@ -745,7 +748,7 @@ class Worker:
                         "reason": "本地找不到，检查下载器的路径映射",
                         "at": time.strftime("%m-%d %H:%M"),
                     }
-                    print(
+                    logger.info(
                         f"[worker] 下载已完成但本地找不到：{name} -> {path}（检查路径映射）"
                     )
                 continue
@@ -758,7 +761,7 @@ class Worker:
                         "reason": "目录里没有可处理的文件（可能全是临时文件）",
                         "at": time.strftime("%m-%d %H:%M"),
                     }
-                    print(f"[worker] 下载已完成但目录里没有可处理的文件：{path}")
+                    logger.info(f"[worker] 下载已完成但目录里没有可处理的文件：{path}")
                 continue
             buckets: Dict[str, List[Path]] = {}
             for file_path in files:
@@ -773,7 +776,7 @@ class Worker:
                         "reason": "不在任何监控目录里，检查路径映射或加一条任务",
                         "at": time.strftime("%m-%d %H:%M"),
                     }
-                    print(f"[worker] 下载完成，但不在任何监控目录里：{path}")
+                    logger.info(f"[worker] 下载完成，但不在任何监控目录里：{path}")
                 continue
             for task_id, items in buckets.items():
                 self._forced.setdefault(task_id, {})
@@ -784,7 +787,7 @@ class Worker:
             done_map[torrent_hash] = time.time()
             self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
             self._persist()
-            print(f"[worker] 下载完成，准备秒传：{name}（{len(files)} 个文件）")
+            logger.info(f"[worker] 下载完成，准备秒传：{name}（{len(files)} 个文件）")
 
     @staticmethod
     def _map_path(raw_path: str, cfg: Dict[str, Any]) -> str:
@@ -859,7 +862,7 @@ class Worker:
         self.state["last_cleanup_count"] = len(removed)
         self._persist()
         if removed:
-            print(f"[worker] 清理空目录 {len(removed)} 个")
+            logger.info(f"[worker] 清理空目录 {len(removed)} 个")
 
     def cleanup_empty_dirs(self) -> List[str]:
         """
