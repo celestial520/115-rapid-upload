@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
+
 from .config import get_settings, load_state, save_state
 from .notify import notify_batch
 from .u115 import U115Client, U115Error
@@ -56,6 +58,18 @@ class Worker:
         self._watch_stop: Optional[threading.Event] = None
         self._watch_thread: Optional[threading.Thread] = None
         self.event_state: Dict[str, Any] = {"count": 0, "last_event_at": 0, "error": ""}
+        # 下载器监控：已完成任务推过来的文件（task_id -> {路径: Path}），等主循环取走
+        self._forced: Dict[str, Dict[str, Path]] = {}
+        self._poll_stop: Optional[threading.Event] = None
+        self._poll_thread: Optional[threading.Thread] = None
+        self._tr_session = ""
+        self.tr_state: Dict[str, Any] = {
+            "connected": False,
+            "error": "",
+            "last_poll": 0,
+            "completed": 0,
+            "missing": {},
+        }
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self.running_scan = False
@@ -72,10 +86,12 @@ class Worker:
         self._thread = threading.Thread(target=self._loop, name="scanner", daemon=True)
         self._thread.start()
         self._start_watcher()
+        self._start_poller()
 
     def stop(self) -> None:
         self._stop.set()
         self._stop_watcher()
+        self._stop_poller()
 
     def _loop(self) -> None:
         """
@@ -95,6 +111,17 @@ class Worker:
                         last_full_scan = time.time()
                     elif event_mode:
                         self._flush_events(cfg)
+                    if self._forced:
+                        buckets = {
+                            tid: list(paths.values())
+                            for tid, paths in self._forced.items()
+                            if paths
+                        }
+                        self._forced = {}
+                        if buckets:
+                            logger_line = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
+                            print(f"[worker] 下载器已完成，立即处理 {logger_line}")
+                            self.run_once(force=True, event_files=buckets)
                     self._maybe_cleanup(cfg)
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
@@ -163,9 +190,10 @@ class Worker:
         设置变更后重建监听（监控目录/模式可能变了）
         """
         self._stop_watcher()
-        if str(get_settings().get("watch_mode") or "event") != "event":
-            return
-        self._start_watcher()
+        self._stop_poller()
+        if str(get_settings().get("watch_mode") or "event") == "event":
+            self._start_watcher()
+        self._start_poller()
 
     def _stop_watcher(self) -> None:
         if self._watch_stop:
@@ -568,6 +596,214 @@ class Worker:
             hour=hour, minute=minute, second=0, microsecond=0
         )
         return target.timestamp()
+
+    # ---------------------------------------------------------------- 下载器监控（Transmission）
+
+    def _start_poller(self) -> None:
+        cfg = get_settings()
+        if not cfg.get("tr_enabled") or not str(cfg.get("tr_url") or "").strip():
+            return
+        if self._poll_thread and self._poll_thread.is_alive():
+            return
+        self._poll_stop = threading.Event()
+
+        def _loop():
+            while not self._poll_stop.is_set():
+                try:
+                    self._poll_transmission()
+                except Exception as err:
+                    self.tr_state["error"] = str(err)
+                    print(f"[worker] 查询下载器出错：{err}")
+                interval = max(5, int(get_settings().get("tr_poll_sec") or 30))
+                self._poll_stop.wait(interval)
+
+        self._poll_thread = threading.Thread(target=_loop, name="tr-poller", daemon=True)
+        self._poll_thread.start()
+        print(f"[worker] 已启动下载器监控：{cfg.get('tr_url')}")
+
+    def _stop_poller(self) -> None:
+        if self._poll_stop:
+            self._poll_stop.set()
+        self._poll_thread = None
+
+    def _tr_rpc(self, method: str, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Transmission RPC。首次会 409 并返回 X-Transmission-Session-Id，拿到后重试一次
+        """
+        cfg = get_settings()
+        url = str(cfg.get("tr_url") or "").strip().rstrip("/")
+        if not url:
+            self.tr_state["error"] = "未填写下载器地址"
+            return None
+        if not url.endswith("/transmission/rpc"):
+            url += "/transmission/rpc"
+        auth = None
+        user = str(cfg.get("tr_username") or "")
+        if user:
+            auth = (user, str(cfg.get("tr_password") or ""))
+        headers = {}
+        if self._tr_session:
+            headers["X-Transmission-Session-Id"] = self._tr_session
+        payload = {"method": method, "arguments": arguments}
+        for _ in range(2):
+            try:
+                resp = requests.post(
+                    url, json=payload, headers=headers, auth=auth, timeout=15
+                )
+            except Exception as err:
+                self.tr_state["connected"] = False
+                self.tr_state["error"] = f"连接失败：{err}"
+                return None
+            if resp.status_code == 409:
+                self._tr_session = resp.headers.get("X-Transmission-Session-Id", "")
+                headers["X-Transmission-Session-Id"] = self._tr_session
+                continue
+            if resp.status_code == 401:
+                self.tr_state["connected"] = False
+                self.tr_state["error"] = "账号或密码错误（401）"
+                return None
+            if resp.status_code != 200:
+                self.tr_state["connected"] = False
+                self.tr_state["error"] = f"HTTP {resp.status_code}"
+                return None
+            self.tr_state["connected"] = True
+            self.tr_state["error"] = ""
+            try:
+                return resp.json()
+            except Exception:
+                return None
+        return None
+
+    def _poll_transmission(self) -> None:
+        """
+        查已完成的任务，把对应文件塞进 _forced，等主循环立即处理
+        """
+        cfg = get_settings()
+        if not cfg.get("tr_enabled"):
+            return
+        data = self._tr_rpc(
+            "torrent-get",
+            {
+                "fields": [
+                    "hashString",
+                    "name",
+                    "downloadDir",
+                    "percentDone",
+                    "status",
+                    "isFinished",
+                    "error",
+                    "errorString",
+                ]
+            },
+        )
+        self.tr_state["last_poll"] = time.time()
+        if not data:
+            return
+        torrents = ((data.get("arguments") or {}).get("torrents")) or []
+        done_map = self.state.setdefault("tr_done", {})
+        missing = self.tr_state.setdefault("missing", {})
+
+        for torrent in torrents:
+            torrent_hash = str(torrent.get("hashString") or "")
+            if not torrent_hash or torrent_hash in done_map:
+                continue
+            finished = (
+                bool(torrent.get("isFinished"))
+                or float(torrent.get("percentDone") or 0) >= 1
+                or int(torrent.get("status") or 0) == 6
+            )
+            if not finished:
+                continue
+            if int(torrent.get("error") or 0) != 0:
+                # 任务报错，跳过（下次改好后仍会重新判断）
+                continue
+            path = self._resolve_download_path(torrent, cfg)
+            name = str(torrent.get("name") or "")
+            if not path or not path.exists():
+                if torrent_hash not in missing:
+                    missing[torrent_hash] = True
+                    print(
+                        f"[worker] 下载已完成但本地找不到：{name} -> {path}（检查路径映射）"
+                    )
+                continue
+            files = self._files_from_torrent(path, cfg)
+            if not files:
+                if torrent_hash not in missing:
+                    missing[torrent_hash] = True
+                    print(f"[worker] 下载已完成但目录里没有可处理的文件：{path}")
+                continue
+            buckets: Dict[str, List[Path]] = {}
+            for file_path in files:
+                task_id = self._task_id_for(file_path, cfg)
+                if task_id:
+                    buckets.setdefault(task_id, []).append(file_path)
+            if not buckets:
+                if torrent_hash not in missing:
+                    missing[torrent_hash] = True
+                    print(f"[worker] 下载完成，但不在任何监控目录里：{path}")
+                continue
+            for task_id, items in buckets.items():
+                self._forced.setdefault(task_id, {})
+                for item in items:
+                    self._forced[task_id][item.as_posix()] = item
+            done_map[torrent_hash] = time.time()
+            self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
+            self._persist()
+            print(f"[worker] 下载完成，准备秒传：{name}（{len(files)} 个文件）")
+
+    @staticmethod
+    def _map_path(raw_path: str, cfg: Dict[str, Any]) -> str:
+        """
+        路径映射：把下载器里的路径换成容器里能看到的位置（长前缀优先）
+        """
+        text = str(raw_path or "")
+        maps = cfg.get("tr_path_map") or []
+        for item in sorted(
+            [m for m in maps if isinstance(m, dict)],
+            key=lambda m: len(str(m.get("from") or "")),
+            reverse=True,
+        ):
+            src = str(item.get("from") or "").rstrip("/")
+            dst = str(item.get("to") or "").rstrip("/")
+            if not src:
+                continue
+            if text == src or text.startswith(src + "/"):
+                return dst + text[len(src) :]
+        return text
+
+    def _resolve_download_path(
+        self, torrent: Dict[str, Any], cfg: Dict[str, Any]
+    ) -> Optional[Path]:
+        name = str(torrent.get("name") or "").strip()
+        base = str(torrent.get("downloadDir") or "").strip()
+        if not name:
+            return None
+        raw = f"{base.rstrip('/')}/{name}" if base else name
+        return Path(self._map_path(raw, cfg))
+
+    def _files_from_torrent(self, path: Path, cfg: Dict[str, Any]) -> List[Path]:
+        """
+        种子可能是单文件，也可能是一个目录（目录就递归取里面的文件）
+        """
+        try:
+            if path.is_file():
+                return [path] if self._acceptable(path, cfg) else []
+            if not path.is_dir():
+                return []
+            iterator = path.rglob("*") if cfg.get("recursive", True) else path.glob("*")
+            return [p for p in iterator if self._acceptable(p, cfg)]
+        except Exception:
+            return []
+
+    def _task_id_for(self, path: Path, cfg: Dict[str, Any]) -> Optional[str]:
+        for task in self._enabled_tasks(cfg):
+            watch = Path(str(task.get("watch_dir"))).expanduser()
+            try:
+                if path.is_relative_to(watch):
+                    return str(task.get("id") or "default")
+            except Exception:
+                continue
+        return None
 
     # ---------------------------------------------------------------- 空目录清理
 

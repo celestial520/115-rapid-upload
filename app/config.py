@@ -36,6 +36,15 @@ DEFAULTS: Dict[str, Any] = {
     "cleanup_time": "03:30",
     # ---- 115 开放平台 ----
     "u115_client_id": "100197847",
+    # ---- Transmission 下载器监控 ----
+    "tr_enabled": False,
+    "tr_url": "",                     # 例如 http://192.168.1.10:9091
+    "tr_username": "",
+    "tr_password": "",
+    "tr_poll_sec": 30,                # 查询下载器状态的间隔（只是 RPC，不碰磁盘）
+    # 路径映射：下载器里的路径 -> 本容器里能看到的路径
+    # [{"from": "/downloads", "to": "/watch"}]
+    "tr_path_map": [],
     # ---- 企业微信通知 ----
     "wecom_enabled": False,
     "wecom_corpid": "",

@@ -149,6 +149,27 @@
     </div>
 
     <div class="divider"></div>
+    <h3>下载器监控（Transmission）</h3>
+    <div class="grid">
+      <div class="check"><input type="checkbox" id="tr_enabled"><label for="tr_enabled">启用（任务完成后立即触发，不用等扫描）</label></div>
+      <label class="f"><span>地址</span><input type="text" id="tr_url" placeholder="http://192.168.1.10:9091"></label>
+      <label class="f"><span>用户名</span><input type="text" id="tr_username" placeholder="留空表示没开认证"></label>
+      <label class="f"><span>密码</span><input type="password" id="tr_password" placeholder="留空则不修改"></label>
+      <label class="f"><span>查询间隔（秒）</span><input type="number" id="tr_poll_sec">
+        <span class="muted">只是问一下下载器状态，不碰硬盘，30 秒足够</span></label>
+    </div>
+    <div class="muted" style="margin:12px 0 6px">路径映射：下载器里的路径 → 本容器里能看到的路径</div>
+    <div class="task-head" style="grid-template-columns:1.6fr 1.6fr auto">
+      <span>下载器内路径</span><span>本容器路径</span><span></span>
+    </div>
+    <div id="mapList"></div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button type="button" id="btnAddMap">+ 添加路径映射</button>
+      <button type="button" id="btnTrTest">测试连接</button>
+      <span id="trTip" class="muted"></span>
+    </div>
+
+    <div class="divider"></div>
     <h3>重试与清理</h3>
     <div class="grid">
       <label class="f"><span>不能秒传时，第二天几点再检测</span><input type="time" id="retry_time"></label>
@@ -280,6 +301,17 @@ async function refresh(){
     $('cRun').textContent = s.last_run_at || '还没跑过';
     $('cMode').textContent = s.delete_source ? '复制到网盘 + 删除源文件' : '复制到网盘 + 保留源文件';
 
+    if($('trTip')){
+      if(!s.tr_enabled){
+        $('trTip').textContent = '未启用';
+      }else if(s.tr_connected){
+        $('trTip').textContent = `已连接 · 本次已完成 ${s.tr_completed} 个任务`
+          + (s.tr_last_poll ? ' · 上次查询 ' + s.tr_last_poll : '');
+      }else{
+        $('trTip').textContent = '未连接：' + (s.tr_error || '检查地址/账号');
+      }
+    }
+
     if(s.watch_mode === 'event'){
       if(s.watch_event_alive){
         const last = s.watch_event_last ? ' · 最近 ' + s.watch_event_last : '';
@@ -310,6 +342,8 @@ async function loadSettings(){
   settings = s.settings;
   tasks = (s.settings.tasks || []).map(t => ({...t}));
   renderTasks();
+  pathMaps = (s.settings.tr_path_map || []).map(m => ({...m}));
+  renderMaps();
   for(const key of Object.keys(settings)){
     const el = $(key);
     if(!el) continue;
@@ -328,11 +362,13 @@ function collectSettings(){
     else out[key] = el.value;
   }
   out.tasks = readTasksFromDom();
+  out.tr_path_map = readMapsFromDom();
   return out;
 }
 
 // ---------------- 监控任务编辑器 ----------------
 let tasks = [];
+let pathMaps = [];
 
 function esc(v){
   return String(v === undefined || v === null ? '' : v)
@@ -388,6 +424,52 @@ function readTasksFromDom(){
   });
   return out;
 }
+
+// ---------------- 下载器路径映射 ----------------
+function renderMaps(){
+  const box = $('mapList');
+  if(!box) return;
+  if(!pathMaps.length){
+    box.innerHTML = '<div class="muted" style="padding:8px 0">不需要映射就留空（两边路径一样时）</div>';
+    return;
+  }
+  box.innerHTML = pathMaps.map((m, i) => `
+    <div class="task-row" data-mi="${i}" style="grid-template-columns:1.6fr 1.6fr auto">
+      <input type="text" class="m-from" value="${esc(m.from)}" placeholder="/downloads">
+      <input type="text" class="m-to" value="${esc(m.to)}" placeholder="/watch">
+      <button type="button" class="m-del" data-mi="${i}">删除</button>
+    </div>`).join('');
+  box.querySelectorAll('.m-del').forEach(btn => {
+    btn.onclick = () => { pathMaps.splice(Number(btn.dataset.mi), 1); renderMaps(); };
+  });
+}
+
+function readMapsFromDom(){
+  const box = $('mapList');
+  if(!box) return [];
+  return [...box.querySelectorAll('.task-row')]
+    .map(row => ({
+      from: row.querySelector('.m-from').value.trim(),
+      to: row.querySelector('.m-to').value.trim(),
+    }))
+    .filter(m => m.from);
+}
+
+$('btnAddMap').onclick = () => {
+  pathMaps.push({ from: '', to: '' });
+  renderMaps();
+};
+
+$('btnTrTest').onclick = async () => {
+  $('trTip').textContent = '连接中…';
+  try{
+    await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    const r = await api('/api/tr/test', {method:'POST'});
+    $('trTip').textContent = '连接成功，Transmission 版本 ' + (r.version || '未知');
+  }catch(e){
+    $('trTip').textContent = '失败：' + e.message;
+  }
+};
 
 $('btnAddTask').onclick = () => {
   tasks.push({ id: newTaskId(), name: '', watch_dir: '', target_dir: '/', enabled: true });

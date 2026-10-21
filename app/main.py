@@ -105,6 +105,18 @@ def api_password(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     return response
 
 
+@app.post("/api/tr/test")
+def api_tr_test() -> Dict[str, Any]:
+    """测试 Transmission 连接（会顺带把当前已完成的任务推一次）"""
+    data = worker._tr_rpc("session-get", {"fields": ["version"]})
+    if not data:
+        raise HTTPException(
+            status_code=400, detail=worker.tr_state.get("error") or "连接失败"
+        )
+    arguments = data.get("arguments") or {}
+    return {"ok": True, "version": arguments.get("version") or "未知"}
+
+
 @app.post("/api/wecom/test")
 def api_wecom_test() -> Dict[str, Any]:
     """发一条测试消息，方便确认 corpid/secret/agentid/代理 是否配对"""
@@ -168,6 +180,16 @@ def api_status() -> Dict[str, Any]:
         if worker.event_state.get("last_event_at")
         else "",
         "pending_count": len(worker._pending),
+        "tr_enabled": bool(cfg.get("tr_enabled")),
+        "tr_url": cfg.get("tr_url"),
+        "tr_connected": bool(worker.tr_state.get("connected")),
+        "tr_error": worker.tr_state.get("error") or "",
+        "tr_completed": worker.tr_state.get("completed") or 0,
+        "tr_last_poll": time.strftime(
+            "%m-%d %H:%M:%S", time.localtime(float(worker.tr_state.get("last_poll") or 0))
+        )
+        if worker.tr_state.get("last_poll")
+        else "",
         "u115_authorized": client.is_authorized(),
         "u115_authorized_at": time.strftime(
             "%Y-%m-%d %H:%M", time.localtime(int(token.get("refresh_time") or 0))
@@ -188,7 +210,7 @@ def api_status() -> Dict[str, Any]:
 @app.get("/api/settings")
 def api_settings() -> Dict[str, Any]:
     cfg = dict(get_settings())
-    for secret_key in ("wecom_secret",):
+    for secret_key in ("wecom_secret", "tr_password"):
         if cfg.get(secret_key):
             cfg[secret_key] = "******"
     return {"settings": cfg, "defaults": DEFAULTS}
@@ -200,6 +222,8 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     # 前端回传 ****** 表示没改密钥
     if payload.get("wecom_secret") == "******":
         payload["wecom_secret"] = current.get("wecom_secret", "")
+    if payload.get("tr_password") == "******":
+        payload["tr_password"] = current.get("tr_password", "")
     save_settings(payload)
     worker.last_error = ""
     worker.refresh_watcher()   # 监控目录/模式可能变了
