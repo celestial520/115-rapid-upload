@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>115 秒传搬运</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e5e7eb; --text:#1f2329; --muted:#6b7280;
+    --primary:#2563eb; --ok:#16a34a; --warn:#d97706; --err:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:20px}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:19px;margin:0;font-weight:600}
+  .pill{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:#bbf7d0;background:#f0fdf4}
+  .pill.bad{color:var(--err);border-color:#fecaca;background:#fef2f2}
+  .spacer{flex:1}
+  button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
+         background:#fff;cursor:pointer;color:var(--text)}
+  button:hover{border-color:#cbd5e1}
+  button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  button.primary:hover{filter:brightness(1.05)}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .k{color:var(--muted);font-size:12px;margin-bottom:4px}
+  .card .v{font-size:15px;font-weight:600;word-break:break-all}
+  .tabs{display:flex;gap:6px;margin-bottom:12px}
+  .tabs button.on{background:#eef2ff;border-color:#c7d2fe;color:var(--primary)}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  .empty{color:var(--muted);text-align:center;padding:26px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  label.f{display:block}
+  label.f span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  input[type=text],input[type=password],input[type=number],input[type=time],select{
+    width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+    font:inherit;background:#fff;color:var(--text)}
+  input:focus,select:focus{outline:2px solid #bfdbfe;border-color:#93c5fd}
+  .row-inline{display:flex;gap:8px}
+  .row-inline input{flex:1}
+  .check{display:flex;align-items:center;gap:8px;padding:6px 0}
+  .check input{width:16px;height:16px}
+  .divider{height:1px;background:var(--line);margin:18px 0}
+  h3{font-size:13px;color:var(--muted);font-weight:600;margin:0 0 10px;letter-spacing:.4px}
+  .modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+  .modal.show{display:flex}
+  .modal .box{background:#fff;border-radius:14px;width:min(460px,100%);padding:20px;max-height:86vh;overflow:auto}
+  .modal .box h2{font-size:16px;margin:0 0 12px}
+  #qrimg{display:flex;justify-content:center;margin:10px 0}
+  #qrimg svg{width:220px;height:220px}
+  .dirlist{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin:10px 0}
+  .dirlist div{padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+  .dirlist div:last-child{border-bottom:none}
+  .dirlist div:hover{background:#f8fafc}
+  .muted{color:var(--muted);font-size:12px}
+  .task-row{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto;gap:8px;
+            align-items:center;padding:8px 0;border-bottom:1px dashed var(--line)}
+  .task-row:last-child{border-bottom:none}
+  .task-row input[type=text]{padding:7px 9px}
+  .task-row .chk{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap}
+  .task-head{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto;gap:8px;
+             font-size:12px;color:var(--muted);padding-bottom:6px;border-bottom:1px solid var(--line)}
+  @media(max-width:780px){
+    .task-head{display:none}
+    .task-row{grid-template-columns:1fr 1fr;gap:6px}
+  }
+  .err{color:var(--err);font-size:13px;margin-top:10px;white-space:pre-wrap}
+  code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>115 秒传搬运</h1>
+    <span id="authPill" class="pill">检查中…</span>
+    <span id="lastPill" class="pill"></span>
+    <div class="spacer"></div>
+    <span id="whoami" class="pill"></span>
+    <button id="btnRun">立即运行一次</button>
+    <button id="btnQr" class="primary">扫码登录 115</button>
+    <button id="btnU115Logout">退出 115 授权</button>
+    <button id="btnSignOut">退出登录</button>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="k">监控任务</div><div class="v" id="cTasks">-</div></div>
+    <div class="card"><div class="k">115 目标目录</div><div class="v" id="cTargets">-</div></div>
+    <div class="card"><div class="k">上次运行</div><div class="v" id="cRun">-</div></div>
+    <div class="card"><div class="k">秒传后处理</div><div class="v" id="cMode">-</div></div>
+  </div>
+
+  <div class="tabs">
+    <button id="tabFiles" class="on">文件状态</button>
+    <button id="tabSet">设置</button>
+  </div>
+
+  <div class="panel" id="panelFiles">
+    <div class="muted" style="margin-bottom:10px">
+      只记录"处理过"的文件：<code>done</code> 秒传成功；<code>held</code> 被拦截等下次重试。
+    </div>
+    <table>
+      <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>状态</th><th>尝试</th><th>上次</th><th>下次</th><th>说明</th></tr></thead>
+      <tbody id="fileRows"><tr><td colspan="8" class="empty">暂无记录</td></tr></tbody>
+    </table>
+    <div id="lastResults" style="margin-top:18px"></div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button id="btnReset">清空处理记录</button>
+    </div>
+  </div>
+
+  <div class="panel" id="panelSet" style="display:none">
+    <h3>基础</h3>
+    <div class="grid">
+      <div class="check"><input type="checkbox" id="enabled"><label for="enabled">启用插件</label></div>
+      <div class="check"><input type="checkbox" id="recursive"><label for="recursive">递归扫描子目录</label></div>
+      <div class="check"><input type="checkbox" id="delete_source"><label for="delete_source">秒传成功后删除本地源文件（秒传本身固定是「复制到网盘」，源文件删不删由这个开关决定）</label></div>
+      <label class="f"><span>体积下限（MB，0 = 不限）</span><input type="number" id="min_size_mb">
+        <span class="muted">默认 0：监控目录里的所有文件都会上传</span></label>
+      <label class="f"><span>文件写入静置（秒）</span><input type="number" id="stable_seconds"></label>
+      <label class="f"><span>扫描间隔（秒）</span><input type="number" id="scan_interval_sec"></label>
+    </div>
+
+    <div class="divider"></div>
+    <h3>监控任务（本地目录 → 115 目录，可加多个）</h3>
+    <div id="taskHead" class="task-head">
+      <span>任务名</span><span>本地监控目录</span><span></span>
+      <span>115 目标目录</span><span></span><span>启用</span><span></span>
+    </div>
+    <div id="taskList"></div>
+    <div style="margin-top:10px">
+      <button type="button" id="btnAddTask">+ 添加监控任务</button>
+    </div>
+
+    <div class="divider"></div>
+    <h3>重试与清理</h3>
+    <div class="grid">
+      <label class="f"><span>不能秒传时，第二天几点再检测</span><input type="time" id="retry_time"></label>
+      <div class="check"><input type="checkbox" id="cleanup_enabled"><label for="cleanup_enabled">每天清理空文件夹</label></div>
+      <label class="f"><span>每天几点清理空文件夹</span><input type="time" id="cleanup_time"></label>
+      <div class="check"><input type="checkbox" id="notify_on_hold"><label for="notify_on_hold">被拦截时也发通知</label></div>
+    </div>
+
+    <div class="divider"></div>
+    <h3>企业微信通知</h3>
+    <div class="grid">
+      <div class="check"><input type="checkbox" id="wecom_enabled"><label for="wecom_enabled">启用企业微信通知</label></div>
+      <div class="check"><input type="checkbox" id="wecom_markdown"><label for="wecom_markdown">使用 markdown 消息</label></div>
+      <label class="f"><span>企业 ID（corpid）</span><input type="text" id="wecom_corpid"></label>
+      <label class="f"><span>应用 Secret</span><input type="password" id="wecom_secret" placeholder="留空则不修改"></label>
+      <label class="f"><span>应用 AgentId</span><input type="text" id="wecom_agentid"></label>
+      <label class="f"><span>接收人（@all 或成员账号，多个用 | 分隔）</span><input type="text" id="wecom_touser"></label>
+      <label class="f"><span>代理地址（可选）</span><input type="text" id="wecom_proxy" placeholder="http://proxy.example.com:8980">
+        <span class="muted">2022-06-20 之后创建的自建应用一般需要配；填了就把请求发到代理，路径不变</span></label>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+      <button type="button" id="btnWecomTest">发送测试消息</button>
+      <span id="wecomTip" class="muted"></span>
+    </div>
+
+    <div class="divider"></div>
+    <h3>CMS 通知（增量同步 / 生成 strm）</h3>
+    <div class="grid">
+      <div class="check"><input type="checkbox" id="cms_enabled"><label for="cms_enabled">启用 CMS 通知</label></div>
+      <label class="f"><span>CMS 地址</span><input type="text" id="cms_domain" placeholder="http://192.168.1.10:3000"></label>
+      <label class="f"><span>CMS API Token</span><input type="text" id="cms_token"></label>
+      <label class="f"><span>通知类型</span>
+        <select id="cms_type">
+          <option value="lift_sync">增量同步</option>
+          <option value="auto_organize">增量同步 + 自动整理</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="divider"></div>
+    <h3>账号密码</h3>
+    <div class="grid">
+      <label class="f"><span>当前密码</span><input type="password" id="pw_old" autocomplete="current-password"></label>
+      <label class="f"><span>新密码（至少 4 位）</span><input type="password" id="pw_new" autocomplete="new-password"></label>
+      <label class="f"><span>确认新密码</span><input type="password" id="pw_confirm" autocomplete="new-password"></label>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button id="btnPw">修改密码</button>
+      <span id="pwTip" class="muted">改完后其它设备上的登录会失效</span>
+    </div>
+
+    <div class="divider"></div>
+    <h3>高级</h3>
+    <div class="grid">
+      <label class="f"><span>115 开放平台 client_id（不懂就别改）</span><input type="text" id="u115_client_id"></label>
+    </div>
+
+    <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+      <button id="btnSave" class="primary">保存设置</button>
+      <span id="saveTip" class="muted"></span>
+    </div>
+    <div id="setErr" class="err"></div>
+  </div>
+</div>
+
+<!-- 扫码登录 -->
+<div class="modal" id="qrModal">
+  <div class="box">
+    <h2>用 115 手机 App 扫码</h2>
+    <div id="qrimg"></div>
+    <div class="muted" id="qrTip">正在获取二维码…</div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button id="btnQrRefresh">刷新二维码</button>
+      <button id="btnQrClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 目录选择 -->
+<div class="modal" id="dirModal">
+  <div class="box">
+    <h2 id="dirTitle">选择目录</h2>
+    <div class="muted" id="dirPath">/</div>
+    <div class="dirlist" id="dirList"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="btnDirUp">上一级</button>
+      <button id="btnDirPick" class="primary">选择这个目录</button>
+      <button id="btnDirClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let settings = {};
+let dirState = {mode:'watch', path:'/', index:-1};
+
+async function api(path, opts={}){
+  const res = await fetch(path, {headers:{'Content-Type':'application/json'}, ...opts});
+  if(res.status === 401){ location.href = '/login'; throw new Error('未登录'); }
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch(e){ data = {detail:text}; }
+  if(!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+function fmtList(items){
+  if(!items || !items.length) return '<div class="empty">暂无结果</div>';
+  const rows = items.map(r =>
+    `<tr><td>${r.file||''}</td><td>${r.size||''}</td><td>${r.status||''}</td><td>${r.note||''}</td></tr>`
+  ).join('');
+  return `<table><thead><tr><th>文件</th><th>大小</th><th>结果</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function refresh(){
+  try{
+    const s = await api('/api/status');
+    $('authPill').textContent = s.u115_authorized ? '115 已授权' : '115 未授权';
+    $('authPill').className = 'pill ' + (s.u115_authorized ? 'ok' : 'bad');
+    $('lastPill').textContent = s.running_scan ? '正在扫描…' : (s.last_error ? '最近错误' : '');
+    $('lastPill').className = 'pill ' + (s.last_error ? 'bad' : '');
+    const tasks = s.tasks || [];
+    $('cTasks').textContent = tasks.length
+      ? `${s.task_count || 0}/${tasks.length} 启用 · ` + tasks.map(t => t.name || t.watch_dir).join('、')
+      : '还没配置';
+    const targets = [...new Set(tasks.map(t => t.target_dir).filter(Boolean))];
+    $('cTargets').textContent = targets.length ? targets.join('、') : '-';
+    $('cRun').textContent = s.last_run_at || '还没跑过';
+    $('cMode').textContent = s.delete_source ? '复制到网盘 + 删除源文件' : '复制到网盘 + 保留源文件';
+
+    const rows = (s.files||[]).map(f => {
+      const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
+      return `<tr><td>${f.task||''}</td><td>${f.key}</td><td>${f.size}</td><td>${badge}</td><td>${f.tries}</td>
+              <td>${f.last_try||''}</td><td>${f.next_try||''}</td><td>${f.note||''}</td></tr>`;
+    }).join('');
+    $('fileRows').innerHTML = rows || '<tr><td colspan="8" class="empty">暂无记录</td></tr>';
+    $('lastResults').innerHTML = '<div class="muted" style="margin-bottom:6px">最近一轮结果</div>' + fmtList(s.last_results);
+    if(s.last_error) $('setErr').textContent = '最近错误：' + s.last_error;
+  }catch(e){ console.warn(e); }
+}
+
+async function loadSettings(){
+  const s = await api('/api/settings');
+  settings = s.settings;
+  tasks = (s.settings.tasks || []).map(t => ({...t}));
+  renderTasks();
+  for(const key of Object.keys(settings)){
+    const el = $(key);
+    if(!el) continue;
+    if(el.type === 'checkbox') el.checked = !!settings[key];
+    else el.value = settings[key] === undefined || settings[key] === null ? '' : settings[key];
+  }
+}
+
+function collectSettings(){
+  const out = {};
+  for(const key of Object.keys(settings)){
+    const el = $(key);
+    if(!el) continue;
+    if(el.type === 'checkbox') out[key] = el.checked;
+    else if(el.type === 'number') out[key] = Number(el.value || 0);
+    else out[key] = el.value;
+  }
+  out.tasks = readTasksFromDom();
+  return out;
+}
+
+// ---------------- 监控任务编辑器 ----------------
+let tasks = [];
+
+function esc(v){
+  return String(v === undefined || v === null ? '' : v)
+    .replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+function newTaskId(){
+  return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+}
+
+function renderTasks(){
+  const box = $('taskList');
+  if(!tasks.length){
+    box.innerHTML = '<div class="muted" style="padding:10px 0">还没有任务，点下面按钮添加一个</div>';
+    return;
+  }
+  box.innerHTML = tasks.map((t, i) => `
+    <div class="task-row" data-i="${i}">
+      <input type="text" class="t-name" value="${esc(t.name)}" placeholder="任务名，如 电影">
+      <input type="text" class="t-watch" value="${esc(t.watch_dir)}" placeholder="/watch/movies">
+      <button type="button" class="t-browse" data-kind="watch" data-i="${i}">浏览</button>
+      <input type="text" class="t-target" value="${esc(t.target_dir || '/')}" placeholder="/电影">
+      <button type="button" class="t-browse" data-kind="115" data-i="${i}">浏览</button>
+      <label class="chk"><input type="checkbox" class="t-enabled" ${t.enabled === false ? '' : 'checked'}>启用</label>
+      <button type="button" class="t-del" data-i="${i}">删除</button>
+    </div>`).join('');
+
+  box.querySelectorAll('.t-browse').forEach(btn => {
+    btn.onclick = () => openDir(btn.dataset.kind, Number(btn.dataset.i));
+  });
+  box.querySelectorAll('.t-del').forEach(btn => {
+    btn.onclick = () => { tasks.splice(Number(btn.dataset.i), 1); renderTasks(); };
+  });
+}
+
+function readTasksFromDom(){
+  const rows = $('taskList').querySelectorAll('.task-row');
+  const out = [];
+  rows.forEach(row => {
+    const watch = row.querySelector('.t-watch').value.trim();
+    const target = row.querySelector('.t-target').value.trim() || '/';
+    const name = row.querySelector('.t-name').value.trim();
+    const enabled = row.querySelector('.t-enabled').checked;
+    if(!watch) return;   // 没填本地目录的行直接忽略
+    out.push({
+      id: row.dataset.i !== undefined && tasks[Number(row.dataset.i)] && tasks[Number(row.dataset.i)].id
+          ? tasks[Number(row.dataset.i)].id : newTaskId(),
+      name: name || watch,
+      watch_dir: watch,
+      target_dir: target,
+      enabled,
+    });
+  });
+  return out;
+}
+
+$('btnAddTask').onclick = () => {
+  tasks.push({ id: newTaskId(), name: '', watch_dir: '', target_dir: '/', enabled: true });
+  renderTasks();
+};
+
+$('btnWecomTest').onclick = async () => {
+  // 先把当前表单存了，测试才用得上新配置
+  $('wecomTip').textContent = '发送中…';
+  try{
+    await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    await api('/api/wecom/test', {method:'POST'});
+    $('wecomTip').textContent = '已发送，看一下企业微信';
+  }catch(e){
+    $('wecomTip').textContent = '失败：' + e.message;
+  }
+};
+
+$('btnSave').onclick = async () => {
+  $('saveTip').textContent = '保存中…';
+  $('setErr').textContent = '';
+  try{
+    await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    $('saveTip').textContent = '已保存 ' + new Date().toLocaleTimeString();
+    refresh();
+  }catch(e){
+    $('saveTip').textContent = '';
+    $('setErr').textContent = '保存失败：' + e.message;
+  }
+};
+
+$('btnRun').onclick = async () => {
+  $('btnRun').disabled = true;
+  $('btnRun').textContent = '运行中…';
+  try{
+    const r = await api('/api/run?force=true', {method:'POST'});
+    $('lastPill').textContent = '本轮处理 ' + r.count + ' 个文件';
+    $('lastPill').className = 'pill ok';
+    refresh();
+  }catch(e){
+    alert(e.message);
+  }finally{
+    $('btnRun').disabled = false;
+    $('btnRun').textContent = '立即运行一次';
+  }
+};
+
+$('btnReset').onclick = async () => {
+  if(!confirm('清空所有处理记录？已秒传成功的文件不会重传，但拦截记录会丢。')) return;
+  await api('/api/reset', {method:'POST'});
+  refresh();
+};
+
+$('tabFiles').onclick = () => { $('tabFiles').classList.add('on'); $('tabSet').classList.remove('on');
+  $('panelFiles').style.display=''; $('panelSet').style.display='none'; };
+$('tabSet').onclick = () => { $('tabSet').classList.add('on'); $('tabFiles').classList.remove('on');
+  $('panelSet').style.display=''; $('panelFiles').style.display='none'; loadSettings(); };
+
+// ---- 扫码登录 ----
+let qrTimer = null;
+async function openQr(){
+  $('qrModal').classList.add('show');
+  await newQr();
+}
+async function newQr(){
+  $('qrimg').innerHTML = '';
+  $('qrTip').textContent = '正在获取二维码…';
+  try{
+    const r = await api('/api/115/qrcode');
+    $('qrimg').innerHTML = r.qrcode;
+    $('qrTip').textContent = '等待扫码…';
+    if(qrTimer) clearTimeout(qrTimer);
+    qrTimer = setTimeout(pollQr, 1500);
+  }catch(e){
+    $('qrTip').textContent = '获取失败：' + e.message;
+  }
+}
+async function pollQr(){
+  try{
+    const r = await api('/api/115/qrcode/status');
+    if(r.status === 2){
+      if(qrTimer) clearTimeout(qrTimer); qrTimer = null;
+      $('qrTip').textContent = '授权成功！';
+      setTimeout(()=>{ $('qrModal').classList.remove('show'); refresh(); }, 800);
+    }else if(r.status === -1 || r.status === -2){
+      if(qrTimer) clearTimeout(qrTimer); qrTimer = null;
+      $('qrTip').textContent = '二维码已过期，请刷新';
+    }else{
+      $('qrTip').textContent = r.msg || (r.status === 1 ? '已扫码，请在手机上确认' : '等待扫码…');
+      qrTimer = setTimeout(pollQr, 1500);
+    }
+  }catch(e){
+    qrTimer = setTimeout(pollQr, 3000);
+  }
+}
+$('btnQr').onclick = openQr;
+$('btnQrRefresh').onclick = newQr;
+$('btnQrClose').onclick = () => { $('qrModal').classList.remove('show'); if(qrTimer) clearInterval(qrTimer); };
+$('btnU115Logout').onclick = async () => {
+  if(!confirm('退出 115 授权？退出后需要重新扫码。')) return;
+  await api('/api/115/logout', {method:'POST'});
+  refresh();
+};
+
+// ---- 目录选择 ----
+async function openDir(mode, index){
+  dirState.mode = mode;
+  dirState.index = index;
+  const row = $('taskList').querySelector(`.task-row[data-i="${index}"]`);
+  const current = row ? (mode === 'watch' ? row.querySelector('.t-watch').value : row.querySelector('.t-target').value) : '';
+  dirState.path = (current || '/').trim() || '/';
+  $('dirTitle').textContent = mode === 'watch' ? '选择本地监控目录（容器内路径）' : '选择 115 网盘目录';
+  $('dirModal').classList.add('show');
+  await loadDir(dirState.path);
+}
+async function loadDir(path){
+  dirState.path = path || '/';
+  $('dirPath').textContent = dirState.path;
+  $('dirList').innerHTML = '<div class="muted" style="padding:10px 12px">加载中…</div>';
+  try{
+    const url = dirState.mode === 'watch'
+      ? '/api/fs?path=' + encodeURIComponent(dirState.path)
+      : '/api/115/dirs?path=' + encodeURIComponent(dirState.path);
+    const r = await api(url);
+    const dirs = r.dirs || [];
+    $('dirList').innerHTML = dirs.length
+      ? dirs.map(d => `<div data-p="${d.path}">📁 ${d.name}</div>`).join('')
+      : '<div class="muted" style="padding:10px 12px">这个目录下没有子文件夹</div>';
+    $('dirList').querySelectorAll('[data-p]').forEach(el => {
+      el.onclick = () => loadDir(el.dataset.p);
+    });
+  }catch(e){
+    $('dirList').innerHTML = `<div class="err" style="padding:10px 12px">${e.message}</div>`;
+  }
+}
+$('btnDirUp').onclick = () => {
+  const p = dirState.path.replace(/\/+$/,'');
+  if(!p || p === '/') return;
+  const up = p.substring(0, p.lastIndexOf('/')) || '/';
+  loadDir(up);
+};
+$('btnDirPick').onclick = () => {
+  const row = $('taskList').querySelector(`.task-row[data-i="${dirState.index}"]`);
+  if(row){
+    if(dirState.mode === 'watch') row.querySelector('.t-watch').value = dirState.path;
+    else row.querySelector('.t-target').value = dirState.path;
+  }
+  $('dirModal').classList.remove('show');
+};
+$('btnDirClose').onclick = () => $('dirModal').classList.remove('show');
+
+// ---- 网页登录相关 ----
+$('btnSignOut').onclick = async () => {
+  await fetch('/api/logout', {method:'POST'});
+  location.href = '/login';
+};
+
+$('btnPw').onclick = async () => {
+  const oldPw = $('pw_old').value;
+  const newPw = $('pw_new').value;
+  const confirmPw = $('pw_confirm').value;
+  if(!oldPw || !newPw){ $('pwTip').textContent = '请填写当前密码和新密码'; return; }
+  if(newPw !== confirmPw){ $('pwTip').textContent = '两次输入的新密码不一致'; return; }
+  $('pwTip').textContent = '提交中…';
+  try{
+    await api('/api/password', {method:'POST', body: JSON.stringify({
+      old_password: oldPw, new_password: newPw, confirm_password: confirmPw
+    })});
+    $('pwTip').textContent = '密码已修改，其它设备需重新登录';
+    $('pw_old').value = $('pw_new').value = $('pw_confirm').value = '';
+  }catch(e){
+    $('pwTip').textContent = '修改失败：' + e.message;
+  }
+};
+
+async function loadAccount(){
+  try{
+    const r = await api('/api/account');
+    $('whoami').textContent = r.username || '';
+  }catch(e){}
+}
+
+// 初始化
+loadSettings().catch(()=>{});
+loadAccount();
+refresh();
+setInterval(refresh, 8000);
+</script>
+</body>
+</html>

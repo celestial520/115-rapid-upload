@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 115 秒传搬运</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--line:#e5e7eb;--text:#1f2329;--muted:#6b7280;--primary:#2563eb}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:var(--bg);color:var(--text);
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  .box{width:min(360px,92vw);background:var(--card);border:1px solid var(--line);
+       border-radius:14px;padding:26px 24px;box-shadow:0 10px 30px rgba(15,23,42,.06)}
+  h1{font-size:17px;margin:0 0 4px;font-weight:600}
+  p.sub{color:var(--muted);font-size:12px;margin:0 0 20px}
+  label{display:block;margin-bottom:14px}
+  label span{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+        font:inherit;background:#fff;color:var(--text)}
+  input:focus{outline:2px solid #bfdbfe;border-color:#93c5fd}
+  button{width:100%;padding:10px;border:none;border-radius:8px;background:var(--primary);
+         color:#fff;font:inherit;font-weight:500;cursor:pointer}
+  button:hover{filter:brightness(1.05)}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .err{color:#dc2626;font-size:13px;margin-top:12px;min-height:18px}
+</style>
+</head>
+<body>
+<form class="box" id="form">
+  <h1>115 秒传搬运</h1>
+  <p class="sub">请登录后使用（默认账号 admin / admin）</p>
+  <label><span>账号</span><input id="username" autocomplete="username" value="admin"></label>
+  <label><span>密码</span><input id="password" type="password" autocomplete="current-password" autofocus></label>
+  <button id="btn" type="submit">登录</button>
+  <div class="err" id="err"></div>
+</form>
+<script>
+const $ = id => document.getElementById(id);
+$('form').onsubmit = async (event) => {
+  event.preventDefault();
+  $('err').textContent = '';
+  $('btn').disabled = true;
+  $('btn').textContent = '登录中…';
+  try{
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: $('username').value.trim(), password: $('password').value})
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.detail || '登录失败');
+    location.href = '/';
+  }catch(e){
+    $('err').textContent = e.message;
+    $('btn').disabled = false;
+    $('btn').textContent = '登录';
+  }
+};
+</script>
+</body>
+</html>

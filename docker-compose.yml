@@ -1,0 +1,16 @@
+services:
+  u115-rapid:
+    image: ghcr.io/celestial520/115-rapid-upload:latest
+    # 想自己本地构建：把上面 image 注释掉，打开下面这行
+    # build: .
+    container_name: u115-rapid
+    restart: unless-stopped
+    ports:
+      - "9191:9191"
+    environment:
+      TZ: Asia/Shanghai
+      DATA_DIR: /config
+    volumes:
+      - ./config:/config
+      # 左边改成你自己的下载目录，右边建议保持 /watch
+      - /volume1/115:/watch
