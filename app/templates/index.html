@@ -61,6 +61,11 @@
   .dirlist div:last-child{border-bottom:none}
   .dirlist div:hover{background:#f8fafc}
   .muted{color:var(--muted);font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .chip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;
+        background:#f8fafc;cursor:pointer;color:var(--text)}
+  .chip:hover{border-color:#93c5fd;color:var(--primary)}
+  .chip .fs{color:var(--muted);margin-left:4px;font-size:11px}
   .task-row{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto auto;gap:8px;
             align-items:center;padding:8px 0;border-bottom:1px dashed var(--line)}
   .task-row:last-child{border-bottom:none}
@@ -244,6 +249,8 @@
   </div>
 </div>
 
+<datalist id="mountOptions"></datalist>
+
 <!-- 扫码登录 -->
 <div class="modal" id="qrModal">
   <div class="box">
@@ -261,6 +268,7 @@
 <div class="modal" id="dirModal">
   <div class="box">
     <h2 id="dirTitle">选择目录</h2>
+    <div class="chips" id="mountChips"></div>
     <div class="muted" id="dirPath">/</div>
     <div class="dirlist" id="dirList"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -275,6 +283,32 @@
 const $ = id => document.getElementById(id);
 let settings = {};
 let dirState = {mode:'watch', path:'/', index:-1};
+let mounts = [];
+
+async function loadMounts(){
+  try{
+    const r = await api('/api/mounts');
+    mounts = r.mounts || [];
+    const dl = $('mountOptions');
+    if(dl){
+      dl.innerHTML = mounts.map(m => `<option value="${esc(m.path)}">${esc(m.fstype || '挂载目录')}</option>`).join('');
+    }
+  }catch(e){ mounts = []; }
+}
+
+function renderMountChips(){
+  const box = $('mountChips');
+  if(!box) return;
+  if(dirState.mode !== 'watch' || !mounts.length){
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = '<span class="muted" style="width:100%">compose 挂载进来的目录（点一下直接跳过去）：</span>'
+    + mounts.map(m => `<span class="chip" data-mp="${esc(m.path)}">${esc(m.path)}<span class="fs">${esc(m.fstype || '')}</span></span>`).join('');
+  box.querySelectorAll('[data-mp]').forEach(el => {
+    el.onclick = () => loadDir(el.dataset.mp);
+  });
+}
 
 async function api(path, opts={}){
   const res = await fetch(path, {headers:{'Content-Type':'application/json'}, ...opts});
@@ -397,7 +431,7 @@ function renderTasks(){
   box.innerHTML = tasks.map((t, i) => `
     <div class="task-row" data-i="${i}">
       <input type="text" class="t-name" value="${esc(t.name)}" placeholder="任务名，如 电影">
-      <input type="text" class="t-watch" value="${esc(t.watch_dir)}" placeholder="/watch/movies">
+      <input type="text" class="t-watch" list="mountOptions" value="${esc(t.watch_dir)}" placeholder="/watch/movies">
       <button type="button" class="t-browse" data-kind="watch" data-i="${i}">浏览</button>
       <input type="text" class="t-target" value="${esc(t.target_dir || '/')}" placeholder="/电影">
       <button type="button" class="t-browse" data-kind="115" data-i="${i}">浏览</button>
@@ -619,6 +653,7 @@ async function openDir(mode, index){
   dirState.path = (current || '/').trim() || '/';
   $('dirTitle').textContent = mode === 'watch' ? '选择本地监控目录（容器内路径）' : '选择 115 网盘目录';
   $('dirModal').classList.add('show');
+  renderMountChips();
   await loadDir(dirState.path);
 }
 async function loadDir(path){
@@ -689,6 +724,7 @@ async function loadAccount(){
 }
 
 // 初始化
+loadMounts();
 loadSettings().catch(()=>{});
 loadAccount();
 refresh();

@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .auth import COOKIE_NAME, SESSION_TTL, Auth
-from .config import DEFAULTS, ensure_api_key, get_settings, load_settings, save_settings
+from .config import DATA_DIR, DEFAULTS, ensure_api_key, get_settings, load_settings, save_settings
 from .u115 import U115Client, U115Error
 from .worker import Worker
 
@@ -396,6 +396,76 @@ def api_logout() -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 目录选择
+
+
+# 容器内不需要作为监控目录出现的路径
+_SYSTEM_PREFIXES = (
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/etc/hosts",
+    "/etc/hostname",
+    "/etc/resolv.conf",
+    "/etc/localtime",
+    "/etc/timezone",
+    "/config",          # 本工具自己的数据目录，compose 里固定挂在 /config
+)
+# 这些是内核/容器内部用的文件系统，不是数据盘
+_SKIP_FS = {
+    "proc", "sysfs", "devpts", "mqueue", "cgroup", "cgroup2", "devtmpfs",
+    "shm", "securityfs", "debugfs", "tracefs", "pstore", "bpf", "autofs",
+    "ramfs", "binfmt_misc", "nsfs", "tmpfs", "overlay",
+}
+
+
+def _read_mounts(proc_path: str = "/proc/self/mountinfo") -> List[Dict[str, str]]:
+    """
+    从 /proc/self/mountinfo 里读出容器内的挂载点（也就是 compose 里 volumes 挂进来的目录）
+    """
+    data_dir = str(DATA_DIR).rstrip("/")
+    seen = set()
+    result: List[Dict[str, str]] = []
+    try:
+        with open(proc_path, "r", encoding="utf-8", errors="ignore") as handle:
+            lines = handle.readlines()
+    except Exception:
+        return result
+    for line in lines:
+        try:
+            left, right = line.split(" - ", 1)
+            fields = left.split()
+            mount_point = fields[4].replace("\\040", " ")
+            right_fields = right.split()
+            fstype = right_fields[0] if right_fields else ""
+            source = right_fields[1] if len(right_fields) > 1 else ""
+        except Exception:
+            continue
+        if mount_point == "/" or mount_point in seen:
+            continue
+        if any(
+            mount_point == prefix or mount_point.startswith(prefix + "/")
+            for prefix in _SYSTEM_PREFIXES
+        ):
+            continue
+        if data_dir and (
+            mount_point == data_dir or mount_point.startswith(data_dir + "/")
+        ):
+            continue
+        if fstype in _SKIP_FS:
+            continue
+        seen.add(mount_point)
+        result.append({"path": mount_point, "fstype": fstype, "source": source})
+    result.sort(key=lambda x: x["path"])
+    return result
+
+
+@app.get("/api/mounts")
+def api_mounts() -> Dict[str, Any]:
+    """
+    返回容器内的挂载点，前端拿来做"挂载目录"快捷选择
+    """
+    return {"mounts": _read_mounts()}
 
 
 @app.get("/api/fs")
