@@ -212,6 +212,7 @@ def api_trigger(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[s
         worker._forced.setdefault(task_id, {})
         for f in files:
             worker._forced[task_id][f.as_posix()] = f
+            worker._forced_src[f.as_posix()] = "mp"
             accepted.append(f.as_posix())
 
     return {
@@ -303,6 +304,11 @@ def api_status() -> Dict[str, Any]:
         "tr_connected": bool(worker.tr_state.get("connected")),
         "tr_error": worker.tr_state.get("error") or "",
         "tr_completed": worker.tr_state.get("completed") or 0,
+        "tr_unmatched": [
+            v
+            for v in list((worker.tr_state.get("missing") or {}).values())[:10]
+            if isinstance(v, dict)
+        ],
         "tr_last_poll": time.strftime(
             "%m-%d %H:%M:%S", time.localtime(float(worker.tr_state.get("last_poll") or 0))
         )
@@ -352,7 +358,7 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def api_run(force: bool = Query(True)) -> Dict[str, Any]:
     if not client.is_authorized():
         raise HTTPException(status_code=400, detail="115 未授权，请先扫码登录")
-    results = worker.run_once(skip_stable=not bool(force))
+    results = worker.run_once(skip_stable=not bool(force), source="manual")
     return {"ok": True, "count": len(results), "results": results}
 
 

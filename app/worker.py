@@ -60,6 +60,8 @@ class Worker:
         self.event_state: Dict[str, Any] = {"count": 0, "last_event_at": 0, "error": ""}
         # 下载器监控：已完成任务推过来的文件（task_id -> {路径: Path}），等主循环取走
         self._forced: Dict[str, Dict[str, Path]] = {}
+        # 每个待处理路径是被谁触发的：tr / mp
+        self._forced_src: Dict[str, str] = {}
         self._poll_stop: Optional[threading.Event] = None
         self._poll_thread: Optional[threading.Thread] = None
         self._tr_session = ""
@@ -107,16 +109,18 @@ class Worker:
                     if cfg.get("watch_events_enabled", True):
                         self._flush_events(cfg)
                     if self._forced:
-                        buckets = {
-                            tid: list(paths.values())
-                            for tid, paths in self._forced.items()
-                            if paths
-                        }
+                        groups: Dict[str, Dict[str, List[Path]]] = {}
+                        for task_id, paths in self._forced.items():
+                            for path in paths.values():
+                                src = self._forced_src.get(path.as_posix(), "tr")
+                                groups.setdefault(src, {}).setdefault(task_id, []).append(path)
                         self._forced = {}
-                        if buckets:
-                            logger_line = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
-                            print(f"[worker] 下载器已完成，立即处理 {logger_line}")
-                            self.run_once(skip_stable=True, event_files=buckets)
+                        self._forced_src = {}
+                        for src, buckets in groups.items():
+                            label = "下载器完成" if src == "tr" else "MP 整理完成"
+                            detail = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
+                            print(f"[worker] {label}，立即处理 {detail}")
+                            self.run_once(skip_stable=True, event_files=buckets, source=src)
                     self._maybe_daily_scan(cfg)
                     self._maybe_cleanup(cfg)
             except Exception as err:  # 任何异常都不能让线程退出
@@ -144,7 +148,7 @@ class Worker:
         self.state["last_daily_scan"] = today_key
         self._persist()
         print(f"[worker] 每日定时扫描开始（{cfg.get('daily_scan_time')}）")
-        results = self.run_once()
+        results = self.run_once(source="daily")
         print(f"[worker] 每日定时扫描结束，处理 {len(results)} 个文件")
 
     # ---------------------------------------------------------------- 文件系统事件
@@ -277,7 +281,7 @@ class Worker:
                 except Exception:
                     continue
         if buckets:
-            self.run_once(skip_stable=True, event_files=buckets)
+            self.run_once(skip_stable=True, event_files=buckets, source="event")
 
     # ---------------------------------------------------------------- 主流程
 
@@ -285,6 +289,7 @@ class Worker:
         self,
         skip_stable: bool = False,
         event_files: Optional[Dict[str, List[Path]]] = None,
+        source: str = "daily",
     ) -> List[Dict[str, Any]]:
         if self.running_scan:
             return []
@@ -328,11 +333,14 @@ class Worker:
                     if self._stop.is_set():
                         break
                     try:
-                        item = self._process(path, watch, cid, cfg, skip_stable, task)
+                        item = self._process(
+                            path, watch, cid, cfg, skip_stable, task, source
+                        )
                     except Exception as err:
                         item = {
                             "file": path.name,
                             "task": task.get("name") or "",
+                            "source": source,
                             "status": "失败",
                             "size": fmt_size(path.stat().st_size if path.exists() else 0),
                             "note": str(err),
@@ -364,6 +372,7 @@ class Worker:
         cfg: Dict[str, Any],
         skip_stable: bool,
         task: Optional[Dict[str, Any]] = None,
+        source: str = "daily",
     ) -> Optional[Dict[str, Any]]:
         task = task or {}
         stat = path.stat()
@@ -408,6 +417,7 @@ class Worker:
                 return {
                     "file": rel_posix,
                     "task": task.get("name") or "",
+                    "source": source,
                     "status": "成功",
                     "size": fmt_size(size),
                     "note": "网盘已有同名文件，"
@@ -423,6 +433,7 @@ class Worker:
             record["sha1"], record["preid"] = sha1, preid
         record["last_try"] = time.time()
         record["tries"] = int(record.get("tries") or 0) + 1
+        record["source"] = source
 
         ok, detail = self.client.rapid_upload(
             target_cid,
@@ -440,6 +451,7 @@ class Worker:
             return {
                 "file": rel_posix,
                 "task": task.get("name") or "",
+                "source": source,
                 "status": "成功",
                 "size": fmt_size(size),
                 "note": "已复制到网盘，已删除源文件" if deleted else "已复制到网盘，保留源文件",
@@ -452,6 +464,7 @@ class Worker:
             return {
                 "file": rel_posix,
                 "task": task.get("name") or "",
+                "source": source,
                 "status": "拦截",
                 "size": fmt_size(size),
                 "note": f"暂不能秒传，明天 {scan_time} 扫描时再试",
@@ -461,6 +474,7 @@ class Worker:
         return {
             "file": rel_posix,
             "task": task.get("name") or "",
+            "source": source,
             "status": "失败",
             "size": fmt_size(size),
             "note": detail,
@@ -722,7 +736,12 @@ class Worker:
             name = str(torrent.get("name") or "")
             if not path or not path.exists():
                 if torrent_hash not in missing:
-                    missing[torrent_hash] = True
+                    missing[torrent_hash] = {
+                        "name": name,
+                        "path": str(path or ""),
+                        "reason": "本地找不到，检查下载器的路径映射",
+                        "at": time.strftime("%m-%d %H:%M"),
+                    }
                     print(
                         f"[worker] 下载已完成但本地找不到：{name} -> {path}（检查路径映射）"
                     )
@@ -730,7 +749,12 @@ class Worker:
             files = self._files_from_torrent(path, cfg)
             if not files:
                 if torrent_hash not in missing:
-                    missing[torrent_hash] = True
+                    missing[torrent_hash] = {
+                        "name": name,
+                        "path": str(path),
+                        "reason": "目录里没有可处理的文件（可能全是临时文件）",
+                        "at": time.strftime("%m-%d %H:%M"),
+                    }
                     print(f"[worker] 下载已完成但目录里没有可处理的文件：{path}")
                 continue
             buckets: Dict[str, List[Path]] = {}
@@ -740,13 +764,20 @@ class Worker:
                     buckets.setdefault(task_id, []).append(file_path)
             if not buckets:
                 if torrent_hash not in missing:
-                    missing[torrent_hash] = True
+                    missing[torrent_hash] = {
+                        "name": name,
+                        "path": str(path),
+                        "reason": "不在任何监控目录里，检查路径映射或加一条任务",
+                        "at": time.strftime("%m-%d %H:%M"),
+                    }
                     print(f"[worker] 下载完成，但不在任何监控目录里：{path}")
                 continue
             for task_id, items in buckets.items():
                 self._forced.setdefault(task_id, {})
                 for item in items:
                     self._forced[task_id][item.as_posix()] = item
+                    self._forced_src[item.as_posix()] = "tr"
+            missing.pop(torrent_hash, None)
             done_map[torrent_hash] = time.time()
             self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
             self._persist()
@@ -885,6 +916,7 @@ class Worker:
                 {
                     "key": rel or key,
                     "task": task_id,
+                    "source": value.get("source") or "",
                     "size": fmt_size(int(value.get("size") or 0)),
                     "status": value.get("status") or "",
                     "tries": value.get("tries") or 0,

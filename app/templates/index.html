@@ -113,8 +113,8 @@
       只记录"处理过"的文件：<code>done</code> 秒传成功；<code>held</code> 被拦截等下次重试。
     </div>
     <table>
-      <thead><tr><th>任务</th><th>文件</th><th>大小</th><th>状态</th><th>尝试</th><th>上次</th><th>下次</th><th>说明</th></tr></thead>
-      <tbody id="fileRows"><tr><td colspan="8" class="empty">暂无记录</td></tr></tbody>
+      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th>大小</th><th>状态</th><th>尝试</th><th>上次</th><th>下次</th><th>说明</th></tr></thead>
+      <tbody id="fileRows"><tr><td colspan="9" class="empty">暂无记录</td></tr></tbody>
     </table>
     <div id="lastResults" style="margin-top:18px"></div>
     <div style="margin-top:14px;display:flex;gap:8px">
@@ -169,6 +169,7 @@
       <button type="button" id="btnTrTest">测试连接</button>
       <span id="trTip" class="muted"></span>
     </div>
+    <div id="trUnmatched" class="err" style="margin-top:8px"></div>
 
     <div class="divider"></div>
     <h3>外部触发（MoviePilot 插件用）</h3>
@@ -320,6 +321,12 @@ async function api(path, opts={}){
   return data;
 }
 
+const SRC_LABELS = {'tr':'TR 完成','mp':'MP 整理','event':'文件变化','daily':'每日扫描','manual':'手动'};
+function srcLabel(src){
+  if(!src) return '-';
+  return SRC_LABELS[src] || src;
+}
+
 function fmtList(items){
   if(!items || !items.length) return '<div class="empty">暂无结果</div>';
   const rows = items.map(r =>
@@ -355,6 +362,14 @@ async function refresh(){
       }
     }
 
+    if($('trUnmatched')){
+      const un = s.tr_unmatched || [];
+      $('trUnmatched').innerHTML = un.length
+        ? '⚠ 有已完成任务没匹配到监控目录：<br>' + un.map(u =>
+            `· ${esc(u.name || '')} → <code>${esc(u.path || '')}</code><br><span class="muted">　${esc(u.reason || '')}</span>`).join('<br>')
+        : '';
+    }
+
     const daily = s.daily_scan_enabled ? `每天 ${s.daily_scan_time} 全量扫描` : '每日扫描已关';
     if(s.watch_events_enabled){
       if(s.watch_event_alive){
@@ -371,10 +386,11 @@ async function refresh(){
 
     const rows = (s.files||[]).map(f => {
       const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
-      return `<tr><td>${f.task||''}</td><td>${f.key}</td><td>${f.size}</td><td>${badge}</td><td>${f.tries}</td>
+      return `<tr><td>${f.task||''}</td><td>${f.key}</td><td><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
+              <td>${f.size}</td><td>${badge}</td><td>${f.tries}</td>
               <td>${f.last_try||''}</td><td>${f.next_try||''}</td><td>${f.note||''}</td></tr>`;
     }).join('');
-    $('fileRows').innerHTML = rows || '<tr><td colspan="8" class="empty">暂无记录</td></tr>';
+    $('fileRows').innerHTML = rows || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
     $('lastResults').innerHTML = '<div class="muted" style="margin-bottom:6px">最近一轮结果</div>' + fmtList(s.last_results);
     if(s.last_error) $('setErr').textContent = '最近错误：' + s.last_error;
   }catch(e){ console.warn(e); }
