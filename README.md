@@ -394,6 +394,10 @@ POST /open/upload/init  →  status == 2 ?
 **Q：企业微信还要填 Token / EncodingAESKey 吗？**
 不用。那两项是「接收」消息（回调）用的，本工具只往企业微信「发送」消息，只需要 企业ID / Secret / AgentId（和可选的代理地址）。
 
+**Q：微信收到通知只显示"暂不支持此消息类型，请在企业微信中查看"？**
+之前发的是 markdown 消息，微信端不渲染。现在已统一改成**纯文本**，微信、企业微信都能正常显示，
+不需要任何额外配置（也不需要填 Token / EncodingAESKey，那两项是"接收消息回调"用的）。
+
 **Q：企业微信报 60020（not allow to access from your ip）？**
 你的服务器出口 IP 不在应用的可信 IP 里，且没配代理。两种解法：后台把 IP 加进「企业可信IP」，或者在设置里填「代理地址」。
 

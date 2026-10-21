@@ -53,7 +53,6 @@ DEFAULTS: Dict[str, Any] = {
     "wecom_agentid": "",
     "wecom_proxy": "",                # 转发代理，如 http://proxy.example.com:8980
     "wecom_touser": "@all",
-    "wecom_markdown": True,
     # ---- CMS 通知 ----
     "cms_enabled": False,
     "cms_domain": "",

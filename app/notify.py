@@ -48,17 +48,15 @@ def send_wecom(title: str, content: str, require_enabled: bool = True) -> Option
         token = _wecom_access_token(corpid, secret)
         if not token:
             return "获取企业微信 access_token 失败"
-        markdown = "# {}\n{}".format(title, content)
+        # 固定用纯文本：markdown 在企业微信 App 能看，但转发到微信会显示
+        # "暂不支持此消息类型，请在企业微信中查看"，所以统一走 text
         payload = {
             "touser": touser,
-            "msgtype": "markdown" if cfg.get("wecom_markdown", True) else "text",
+            "msgtype": "text",
             "agentid": int(agentid),
             "safe": 0,
+            "text": {"content": _truncate(f"{title}\n{content}")},
         }
-        if payload["msgtype"] == "markdown":
-            payload["markdown"] = {"content": _truncate(markdown)}
-        else:
-            payload["text"] = {"content": _truncate(f"{title}\n{content}")}
         resp = requests.post(
             f"{_wecom_base()}/cgi-bin/message/send?access_token={token}",
             json=payload,
@@ -154,7 +152,7 @@ def _build_text(results: List[Dict[str, Any]]) -> tuple:
 
     lines: List[str] = []
     if succeeded:
-        lines.append(f"**已秒传成功 {len(succeeded)} 个**")
+        lines.append(f"【已秒传成功 {len(succeeded)} 个】")
         for item in succeeded[:15]:
             size = item.get("size") or ""
             lines.append(f"· {label(item)}" + (f"  （{size}）" if size else ""))
@@ -169,7 +167,7 @@ def _build_text(results: List[Dict[str, Any]]) -> tuple:
             if "再试" in note:
                 next_hint = note[note.find("，") + 1 :] if "，" in note else ""
                 break
-        lines.append(f"**暂不能秒传 {len(held)} 个**" + (f"，{next_hint}" if next_hint else ""))
+        lines.append(f"【暂不能秒传 {len(held)} 个】" + (f" {next_hint}" if next_hint else ""))
         for item in held[:10]:
             lines.append(f"· {label(item)}")
         if len(held) > 10:
@@ -177,7 +175,7 @@ def _build_text(results: List[Dict[str, Any]]) -> tuple:
     if failed:
         if lines:
             lines.append("")
-        lines.append(f"**失败 {len(failed)} 个**")
+        lines.append(f"【失败 {len(failed)} 个】")
         for item in failed[:10]:
             lines.append(f"· {label(item)}：{item.get('note') or ''}")
     return title, "\n".join(lines)
