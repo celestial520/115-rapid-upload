@@ -10,20 +10,25 @@
 """
 import base64
 import hashlib
+import json
 import secrets
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from .config import load_token, save_token, get_settings
+from .logger import get_logger
+from .oss import OssError, OssMultipart
 
 API_BASE = "https://proapi.115.com"
 PASSPORT = "https://passportapi.115.com"
 QRCODE_API = "https://qrcodeapi.115.com"
 
 _UA = "W115Rapid/1.0"
+logger = get_logger()
 
 
 class U115Error(Exception):
@@ -322,3 +327,174 @@ class U115Client:
         if status == 1:
             return False, "115 上没有相同内容，需要真实上传（本工具只做秒传）"
         return False, f"未命中秒传（status={status}, code={code}）"
+
+    # ---------------------------------------------------------------- 真实上传
+
+    @staticmethod
+    def _part_size(size: int) -> int:
+        """
+        分片大小：目标 96 片左右，最小 16MB，按 MB 对齐
+        """
+        mb = 16 * 1024 * 1024
+        if size <= mb:
+            return mb
+        target = -(-size // 96)
+        return max(mb, ((target + mb - 1) // mb) * mb)
+
+    @staticmethod
+    def _sign_value(path: Path, sign_check: str) -> Optional[str]:
+        """115 二次认证：回传指定字节区间的 SHA1（大写）"""
+        try:
+            start_text, end_text = str(sign_check).split("-")[:2]
+            start, end = int(start_text), int(end_text)
+            with open(path, "rb") as handle:
+                handle.seek(start)
+                chunk = handle.read(max(0, end - start) + 1)
+            return hashlib.sha1(chunk).hexdigest().upper()
+        except Exception:
+            return None
+
+    def real_upload(
+        self,
+        cid: str,
+        name: str,
+        path: Path,
+        sha1: str,
+        preid: str,
+        progress=None,
+    ) -> Tuple[bool, str]:
+        """
+        不能秒传时走真实上传（分片上传到 OSS，再由 115 回调建文件）
+        返回 (是否成功, 说明)
+        """
+        try:
+            size = path.stat().st_size
+        except Exception as err:
+            return False, f"读取文件失败：{err}"
+
+        target_param = f"U_1_{cid}"
+        init_data = {
+            "file_name": name,
+            "file_size": size,
+            "target": target_param,
+            "fileid": sha1,
+            "preid": preid,
+        }
+        try:
+            payload = self.request(
+                "POST", "/open/upload/init", data=init_data,
+                accepted_codes=(0, 20004, 700, 701),
+            )
+        except U115Error as err:
+            return False, f"初始化上传失败：{err}"
+        data = (payload or {}).get("data") or {}
+
+        # 二次认证
+        if data.get("code") in (700, 701) and data.get("sign_check"):
+            sign_val = self._sign_value(path, data["sign_check"])
+            if sign_val:
+                init_data.update(
+                    {
+                        "pick_code": data.get("pick_code"),
+                        "sign_key": data.get("sign_key"),
+                        "sign_val": sign_val,
+                    }
+                )
+                payload = self.request(
+                    "POST", "/open/upload/init", data=init_data,
+                    accepted_codes=(0, 20004, 700, 701),
+                )
+                data = (payload or {}).get("data") or {}
+
+        if data.get("status") == 2:
+            return True, "秒传成功"
+        bucket_name = data.get("bucket")
+        object_name = data.get("object")
+        callback = data.get("callback")
+        pick_code = data.get("pick_code")
+        if not (bucket_name and object_name and callback):
+            return False, f"没拿到上传参数（status={data.get('status')}）"
+
+        # 上传凭证
+        try:
+            token = (self.request("GET", "/open/upload/get_token") or {}).get("data") or {}
+        except U115Error as err:
+            return False, f"获取上传凭证失败：{err}"
+        endpoint = token.get("endpoint")
+        ak = token.get("AccessKeyId")
+        sk = token.get("AccessKeySecret")
+        sts = token.get("SecurityToken")
+        if not (endpoint and ak and sk):
+            return False, "上传凭证不完整"
+
+        # 断点续传（能拿到新回调就用新的）
+        try:
+            resume = (
+                self.request(
+                    "POST",
+                    "/open/upload/resume",
+                    data={
+                        "file_size": size,
+                        "target": target_param,
+                        "fileid": sha1,
+                        "pick_code": pick_code,
+                    },
+                )
+                or {}
+            ).get("data") or {}
+            if resume.get("callback"):
+                callback = resume["callback"]
+        except Exception:
+            pass
+
+        callback_main = (
+            callback.get("callback") if isinstance(callback, dict) else str(callback)
+        )
+        callback_var = (
+            callback.get("callback_var") if isinstance(callback, dict) else None
+        )
+        if not callback_main:
+            return False, "回调参数为空"
+        cb_b64 = base64.b64encode(str(callback_main).encode("utf-8")).decode()
+        cbv_b64 = (
+            base64.b64encode(str(callback_var).encode("utf-8")).decode()
+            if callback_var
+            else None
+        )
+
+        part_size = self._part_size(size)
+        logger.info(f"[115] 开始真实上传：{name}（{size} 字节，分片 {part_size} 字节）")
+        uploader = OssMultipart(endpoint, bucket_name, ak, sk, sts)
+        try:
+            upload_id = uploader.init_multipart(object_name)
+            parts: List[Tuple[int, str]] = []
+            number = 1
+            uploaded = 0
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(part_size)
+                    if not chunk:
+                        break
+                    etag = uploader.upload_part(object_name, upload_id, number, chunk)
+                    parts.append((number, etag))
+                    uploaded += len(chunk)
+                    if progress:
+                        try:
+                            progress(int(uploaded * 100 / size))
+                        except Exception:
+                            pass
+                    if number % 10 == 0:
+                        logger.info(f"[115] {name} 已上传 {uploaded}/{size} 字节")
+                    number += 1
+            result = uploader.complete(object_name, upload_id, parts, cb_b64, cbv_b64)
+        except OssError as err:
+            logger.error(f"[115] 真实上传失败：{name} - {err}")
+            return False, str(err)
+        except Exception as err:
+            logger.error(f"[115] 真实上传异常：{name} - {err}")
+            return False, f"异常：{err}"
+
+        if isinstance(result, dict) and result.get("state") is False:
+            return False, f"115 回调失败：{result}"
+        logger.info(f"[115] 真实上传完成：{name}")
+        return True, f"已上传（{len(parts)} 个分片）"

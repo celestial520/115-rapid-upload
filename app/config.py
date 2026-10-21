@@ -35,6 +35,7 @@ DEFAULTS: Dict[str, Any] = {
     #   "target_dir": "/电影", "enabled": True}]
     "tasks": [],
     "delete_source": True,            # 秒传成功后删除本地源文件（独立开关）
+    "real_upload": False,             # 不能秒传时是否真的上传（占用上行带宽，默认关）
     # 不再按扩展名过滤：监控目录里所有文件都会上传（隐藏文件和下载临时文件除外）
     "min_size_mb": 0,
     "recursive": True,

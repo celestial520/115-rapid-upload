@@ -150,6 +150,7 @@
       <div class="check"><input type="checkbox" id="enabled"><label for="enabled">启用插件</label></div>
       <div class="check"><input type="checkbox" id="recursive"><label for="recursive">扫描监控文件夹子目录</label></div>
       <div class="check"><input type="checkbox" id="delete_source"><label for="delete_source">秒传成功后删除本地源文件（秒传本身固定是「复制到网盘」，源文件删不删由这个开关决定）</label></div>
+      <div class="check"><input type="checkbox" id="real_upload"><label for="real_upload">不能秒传时改为真实上传（会占用上行带宽，大文件慎用）</label></div>
       <label class="f"><span>体积下限（MB，0 = 不限）</span><input type="number" id="min_size_mb">
         <span class="muted">默认 0：监控目录里的所有文件都会上传</span></label>
       <label class="f"><span>文件写入静置（秒）</span><input type="number" id="stable_seconds">

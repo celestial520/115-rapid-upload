@@ -464,6 +464,38 @@ class Worker:
             }
 
         if detail.startswith("115 上没有相同内容"):
+            # 开了"真实上传"就直接传，否则拦截等下次
+            if cfg.get("real_upload"):
+                logger.info(f"[worker] {rel_posix} 不能秒传，开始真实上传")
+                uploaded, upload_detail = self.client.real_upload(
+                    target_cid, path.name, path, sha1, preid
+                )
+                if uploaded:
+                    record["status"] = "done"
+                    record["note"] = upload_detail
+                    deleted = self._finish_local(path, cfg, task)
+                    return {
+                        "file": rel_posix,
+                        "task": task.get("name") or "",
+                        "source": source,
+                        "status": "成功",
+                        "size": fmt_size(size),
+                        "note": "真实上传完成，已删除源文件"
+                        if deleted
+                        else "真实上传完成，保留源文件",
+                    }
+                record["status"] = "held"
+                record["note"] = upload_detail
+                logger.warning(f"[worker] {rel_posix} 真实上传失败：{upload_detail}")
+                return {
+                    "file": rel_posix,
+                    "task": task.get("name") or "",
+                    "source": source,
+                    "status": "失败",
+                    "size": fmt_size(size),
+                    "note": f"真实上传失败：{upload_detail}",
+                }
+
             scan_time = str(cfg.get("daily_scan_time") or "09:00")
             record["status"] = "held"
             record["note"] = detail
