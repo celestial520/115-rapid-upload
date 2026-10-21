@@ -404,7 +404,7 @@ class Worker:
             if self.client.find_file(target_cid, path.name):
                 record["status"] = "done"
                 record["note"] = "网盘已有同名文件"
-                deleted = self._finish_local(path, cfg)
+                deleted = self._finish_local(path, cfg, task)
                 return {
                     "file": rel_posix,
                     "task": task.get("name") or "",
@@ -436,7 +436,7 @@ class Worker:
         if ok:
             record["status"] = "done"
             record["note"] = "秒传成功"
-            deleted = self._finish_local(path, cfg)
+            deleted = self._finish_local(path, cfg, task)
             return {
                 "file": rel_posix,
                 "task": task.get("name") or "",
@@ -492,10 +492,15 @@ class Worker:
         self._cid_cache[net_dir] = cid
         return cid
 
-    def _finish_local(self, path: Path, cfg: Dict[str, Any]) -> bool:
+    def _finish_local(
+        self, path: Path, cfg: Dict[str, Any], task: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
-        秒传永远是"复制"到网盘（源文件本来就在），这里只处理本地源文件要不要删
+        秒传永远是"复制"到网盘（源文件本来就在），这里只处理本地源文件要不要删。
+        任务可以单独声明「保留源文件」——比如下载目录还要做种/给 MP 整理，不能删。
         """
+        if task and bool(task.get("keep_source")):
+            return False
         if not cfg.get("delete_source", True):
             return False
         try:
