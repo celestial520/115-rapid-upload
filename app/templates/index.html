@@ -82,6 +82,7 @@
     <h1>115秒传助手</h1>
     <span id="authPill" class="pill">检查中…</span>
     <span id="lastPill" class="pill"></span>
+    <span id="eventPill" class="pill"></span>
     <div class="spacer"></div>
     <span id="whoami" class="pill"></span>
     <button id="btnRun">立即运行一次</button>
@@ -124,8 +125,16 @@
       <div class="check"><input type="checkbox" id="delete_source"><label for="delete_source">秒传成功后删除本地源文件（秒传本身固定是「复制到网盘」，源文件删不删由这个开关决定）</label></div>
       <label class="f"><span>体积下限（MB，0 = 不限）</span><input type="number" id="min_size_mb">
         <span class="muted">默认 0：监控目录里的所有文件都会上传</span></label>
-      <label class="f"><span>文件写入静置（秒）</span><input type="number" id="stable_seconds"></label>
-      <label class="f"><span>扫描间隔（秒）</span><input type="number" id="scan_interval_sec"></label>
+      <label class="f"><span>文件写入静置（秒）</span><input type="number" id="stable_seconds">
+        <span class="muted">最后一次变化后静置多久才处理，事件模式下就是"响应延迟"</span></label>
+      <label class="f"><span>监控方式</span>
+        <select id="watch_mode">
+          <option value="event">文件系统事件（推荐，几乎不扫盘）</option>
+          <option value="poll">定时全量扫描</option>
+        </select>
+      </label>
+      <label class="f"><span>兜底扫描间隔（秒）</span><input type="number" id="scan_interval_sec">
+        <span class="muted">事件模式下平时不扫盘，只按这个间隔兜底扫一次（默认 900 秒）</span></label>
     </div>
 
     <div class="divider"></div>
@@ -270,6 +279,20 @@ async function refresh(){
     $('cTargets').textContent = targets.length ? targets.join('、') : '-';
     $('cRun').textContent = s.last_run_at || '还没跑过';
     $('cMode').textContent = s.delete_source ? '复制到网盘 + 删除源文件' : '复制到网盘 + 保留源文件';
+
+    if(s.watch_mode === 'event'){
+      if(s.watch_event_alive){
+        const last = s.watch_event_last ? ' · 最近 ' + s.watch_event_last : '';
+        $('eventPill').textContent = `事件监听中 · 事件 ${s.watch_event_count} 次 · 待处理 ${s.pending_count}${last}`;
+        $('eventPill').className = 'pill ok';
+      }else{
+        $('eventPill').textContent = '事件监听未启动 · ' + (s.watch_event_error || '退化为定时扫描');
+        $('eventPill').className = 'pill bad';
+      }
+    }else{
+      $('eventPill').textContent = `定时扫描 · 每 ${s.scan_interval_sec} 秒全量扫一次`;
+      $('eventPill').className = 'pill';
+    }
 
     const rows = (s.files||[]).map(f => {
       const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');

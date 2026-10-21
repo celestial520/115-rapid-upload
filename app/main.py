@@ -157,6 +157,17 @@ def api_status() -> Dict[str, Any]:
         "cleanup_enabled": cfg.get("cleanup_enabled"),
         "cleanup_time": cfg.get("cleanup_time"),
         "scan_interval_sec": cfg.get("scan_interval_sec"),
+        "watch_mode": cfg.get("watch_mode"),
+        "watch_event_alive": worker._watcher_alive(),
+        "watch_event_error": worker.event_state.get("error") or "",
+        "watch_event_count": worker.event_state.get("count") or 0,
+        "watch_event_last": time.strftime(
+            "%m-%d %H:%M:%S",
+            time.localtime(float(worker.event_state.get("last_event_at") or 0)),
+        )
+        if worker.event_state.get("last_event_at")
+        else "",
+        "pending_count": len(worker._pending),
         "u115_authorized": client.is_authorized(),
         "u115_authorized_at": time.strftime(
             "%Y-%m-%d %H:%M", time.localtime(int(token.get("refresh_time") or 0))
@@ -191,6 +202,7 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         payload["wecom_secret"] = current.get("wecom_secret", "")
     save_settings(payload)
     worker.last_error = ""
+    worker.refresh_watcher()   # 监控目录/模式可能变了
     return {"ok": True, "settings": api_settings()["settings"]}
 
 

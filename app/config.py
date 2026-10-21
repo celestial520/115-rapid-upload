@@ -24,8 +24,11 @@ DEFAULTS: Dict[str, Any] = {
     # 不再按扩展名过滤：监控目录里所有文件都会上传（隐藏文件和下载临时文件除外）
     "min_size_mb": 0,
     "recursive": True,
-    "stable_seconds": 60,
-    "scan_interval_sec": 60,
+    "stable_seconds": 30,             # 最后一次变化后静置多久才处理（事件模式下=响应延迟）
+    # event = 文件系统事件(inotify)驱动，几乎不扫盘；poll = 纯定时全量扫描
+    "watch_mode": "event",
+    # 兜底全量扫描间隔（秒）：event 模式下平时不扫盘，只为防止事件丢失偶尔扫一次
+    "scan_interval_sec": 900,
     # ---- 重试 ----
     "retry_time": "09:00",
     # ---- 空目录清理 ----
