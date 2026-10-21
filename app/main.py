@@ -1,5 +1,5 @@
 """
-115 秒传搬运 · Web 控制台
+115秒传助手 · Web 控制台
 """
 import base64
 import io
@@ -26,7 +26,7 @@ auth = Auth()
 client = U115Client()
 worker = Worker(client)
 
-app = FastAPI(title="115 秒传搬运", docs_url=None, redoc_url=None)
+app = FastAPI(title="115秒传助手", docs_url=None, redoc_url=None)
 
 PUBLIC_PATHS = {"/login", "/api/login", "/favicon.ico", "/api/health"}
 
@@ -111,7 +111,7 @@ def api_wecom_test() -> Dict[str, Any]:
     from .notify import send_wecom
 
     error = send_wecom(
-        "115 秒传搬运 · 测试消息",
+        "115秒传助手 · 测试消息",
         "这是一条测试通知，收到说明企业微信配置正确。",
         require_enabled=False,
     )

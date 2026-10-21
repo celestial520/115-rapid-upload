@@ -144,13 +144,13 @@ def _build_text(results: List[Dict[str, Any]]) -> tuple:
         name = str(item.get("file") or "")
         return f"{item.get('task')}/{name}" if multi and item.get("task") else name
 
-    title = "115 秒传"
+    title = "115秒传助手"
     if succeeded:
-        title = f"115 秒传：{len(succeeded)} 个文件已入库"
+        title = f"115秒传助手：{len(succeeded)} 个文件已入库"
     elif failed:
-        title = "115 秒传：处理失败"
+        title = "115秒传助手：处理失败"
     elif held:
-        title = "115 秒传：暂不能秒传"
+        title = "115秒传助手：暂不能秒传"
 
     lines: List[str] = []
     if succeeded:

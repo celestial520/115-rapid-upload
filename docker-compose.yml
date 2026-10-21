@@ -3,7 +3,7 @@ services:
     image: ghcr.io/celestial520/115-rapid-upload:latest
     # 想自己本地构建：把上面 image 注释掉，打开下面这行
     # build: .
-    container_name: u115-rapid
+    container_name: 115-rapid-assistant
     restart: unless-stopped
     ports:
       - "9191:9191"
