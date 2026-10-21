@@ -166,6 +166,20 @@
     </div>
 
     <div class="divider"></div>
+    <h3>外部触发（MoviePilot 插件用）</h3>
+    <div class="grid">
+      <label class="f"><span>API Key</span>
+        <div class="row-inline">
+          <input type="text" id="api_key" readonly>
+          <button type="button" id="btnCopyKey">复制</button>
+          <button type="button" id="btnResetKey">重置</button>
+        </div>
+        <span class="muted">把「本机地址:9191」「这个 Key」和「路径映射」填到 MP 插件里，
+          插件整理完就会直接推送路径过来，不用等扫描</span>
+      </label>
+    </div>
+
+    <div class="divider"></div>
     <h3>清理与通知</h3>
     <div class="grid">
       <div class="check"><input type="checkbox" id="cleanup_enabled"><label for="cleanup_enabled">每天清理空文件夹</label></div>
@@ -449,6 +463,29 @@ function readMapsFromDom(){
     }))
     .filter(m => m.from);
 }
+
+$('btnCopyKey').onclick = async () => {
+  const val = $('api_key').value;
+  try{
+    await navigator.clipboard.writeText(val);
+    $('trTip').textContent = 'API Key 已复制';
+  }catch(e){
+    $('api_key').select();
+    document.execCommand('copy');
+    $('trTip').textContent = 'API Key 已复制';
+  }
+};
+
+$('btnResetKey').onclick = async () => {
+  if(!confirm('重置后 MP 插件里的 Key 会失效，需要同步修改。继续？')) return;
+  try{
+    const r = await api('/api/apikey/reset', {method:'POST'});
+    $('api_key').value = r.api_key;
+    $('trTip').textContent = 'API Key 已重置，记得去 MP 插件里更新';
+  }catch(e){
+    $('trTip').textContent = '重置失败：' + e.message;
+  }
+};
 
 $('btnAddMap').onclick = () => {
   pathMaps.push({ from: '', to: '' });

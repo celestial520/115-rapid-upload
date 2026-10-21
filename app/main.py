@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .auth import COOKIE_NAME, SESSION_TTL, Auth
-from .config import DEFAULTS, get_settings, load_settings, save_settings
+from .config import DEFAULTS, ensure_api_key, get_settings, load_settings, save_settings
 from .u115 import U115Client, U115Error
 from .worker import Worker
 
@@ -22,13 +22,21 @@ TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
 
 load_settings()
+ensure_api_key()
 auth = Auth()
 client = U115Client()
 worker = Worker(client)
 
 app = FastAPI(title="115秒传助手", docs_url=None, redoc_url=None)
 
-PUBLIC_PATHS = {"/login", "/api/login", "/favicon.ico", "/api/health"}
+PUBLIC_PATHS = {
+    "/login",
+    "/api/login",
+    "/favicon.ico",
+    "/api/health",
+    "/api/trigger",
+    "/api/ping",
+}
 
 
 @app.middleware("http")
@@ -103,6 +111,115 @@ def api_password(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         COOKIE_NAME, token, max_age=SESSION_TTL, httponly=True, samesite="lax", path="/"
     )
     return response
+
+
+def _check_api_key(request: Request) -> None:
+    import hmac as _hmac
+
+    expected = str(get_settings().get("api_key") or "")
+    provided = (
+        request.headers.get("X-API-Key")
+        or request.query_params.get("key")
+        or ""
+    )
+    if not expected or not _hmac.compare_digest(str(provided), expected):
+        raise HTTPException(status_code=401, detail="API Key 不正确")
+
+
+@app.post("/api/apikey/reset")
+def api_apikey_reset() -> Dict[str, Any]:
+    """重置外部触发密钥（MP 插件里要同步改）"""
+    import secrets
+
+    new_key = secrets.token_hex(24)
+    save_settings({"api_key": new_key})
+    return {"ok": True, "api_key": new_key}
+
+
+@app.get("/api/ping")
+def api_ping(request: Request) -> Dict[str, Any]:
+    """给 MoviePilot 插件做连通性检查"""
+    _check_api_key(request)
+    cfg = get_settings()
+    return {
+        "ok": True,
+        "version": "1.0",
+        "tasks": [
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "watch_dir": t.get("watch_dir"),
+                "target_dir": t.get("target_dir"),
+                "enabled": t.get("enabled", True),
+            }
+            for t in (cfg.get("tasks") or [])
+            if isinstance(t, dict)
+        ],
+    }
+
+
+@app.post("/api/trigger")
+def api_trigger(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """
+    外部触发：把指定路径（文件或目录）立刻交给秒传流程
+    MoviePilot 整理完成后就调这个，不用等扫描
+    """
+    _check_api_key(request)
+    raw_paths = payload.get("paths") or payload.get("path") or []
+    if isinstance(raw_paths, str):
+        raw_paths = [raw_paths]
+    if not isinstance(raw_paths, list):
+        raise HTTPException(status_code=400, detail="paths 必须是数组")
+
+    cfg = get_settings()
+    tasks = worker._enabled_tasks(cfg)
+    accepted: List[str] = []
+    skipped: List[Dict[str, str]] = []
+
+    for raw in raw_paths[:500]:
+        try:
+            path = Path(str(raw)).expanduser()
+        except Exception:
+            skipped.append({"path": str(raw), "reason": "路径无效"})
+            continue
+        if not path.exists():
+            skipped.append({"path": str(path), "reason": "文件不存在"})
+            continue
+        files: List[Path] = []
+        target_task = None
+        for task in tasks:
+            watch = Path(str(task.get("watch_dir"))).expanduser()
+            try:
+                if path == watch or path.is_relative_to(watch):
+                    target_task = task
+                    break
+            except Exception:
+                continue
+        if not target_task:
+            skipped.append({"path": str(path), "reason": "不在任何监控目录内"})
+            continue
+        if path.is_dir():
+            iterator = (
+                path.rglob("*") if cfg.get("recursive", True) else path.glob("*")
+            )
+            files = [f for f in iterator if worker._acceptable(f, cfg)]
+        elif worker._acceptable(path, cfg):
+            files = [path]
+        if not files:
+            skipped.append({"path": str(path), "reason": "没有可处理的文件"})
+            continue
+        task_id = str(target_task.get("id") or "default")
+        worker._forced.setdefault(task_id, {})
+        for f in files:
+            worker._forced[task_id][f.as_posix()] = f
+            accepted.append(f.as_posix())
+
+    return {
+        "ok": True,
+        "accepted": len(accepted),
+        "skipped": skipped[:20],
+        "files": accepted[:50],
+    }
 
 
 @app.post("/api/tr/test")
