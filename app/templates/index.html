@@ -127,14 +127,10 @@
         <span class="muted">默认 0：监控目录里的所有文件都会上传</span></label>
       <label class="f"><span>文件写入静置（秒）</span><input type="number" id="stable_seconds">
         <span class="muted">最后一次变化后静置多久才处理，事件模式下就是"响应延迟"</span></label>
-      <label class="f"><span>监控方式</span>
-        <select id="watch_mode">
-          <option value="event">文件系统事件（推荐，几乎不扫盘）</option>
-          <option value="poll">定时全量扫描</option>
-        </select>
-      </label>
-      <label class="f"><span>兜底扫描间隔（秒）</span><input type="number" id="scan_interval_sec">
-        <span class="muted">事件模式下平时不扫盘，只按这个间隔兜底扫一次（默认 900 秒）</span></label>
+      <div class="check"><input type="checkbox" id="watch_events_enabled"><label for="watch_events_enabled">文件变化实时触发（inotify，几乎不扫盘）</label></div>
+      <div class="check"><input type="checkbox" id="daily_scan_enabled"><label for="daily_scan_enabled">每天定时全量扫描一次</label></div>
+      <label class="f"><span>每天几点扫描</span><input type="time" id="daily_scan_time">
+        <span class="muted">扫一遍监控目录，处理从别处移进来的文件；也顺手重试上次失败的</span></label>
     </div>
 
     <div class="divider"></div>
@@ -170,9 +166,8 @@
     </div>
 
     <div class="divider"></div>
-    <h3>重试与清理</h3>
+    <h3>清理与通知</h3>
     <div class="grid">
-      <label class="f"><span>不能秒传时，第二天几点再检测</span><input type="time" id="retry_time"></label>
       <div class="check"><input type="checkbox" id="cleanup_enabled"><label for="cleanup_enabled">每天清理空文件夹</label></div>
       <label class="f"><span>每天几点清理空文件夹</span><input type="time" id="cleanup_time"></label>
       <div class="check"><input type="checkbox" id="notify_on_hold"><label for="notify_on_hold">被拦截时也发通知</label></div>
@@ -312,17 +307,17 @@ async function refresh(){
       }
     }
 
-    if(s.watch_mode === 'event'){
+    const daily = s.daily_scan_enabled ? `每天 ${s.daily_scan_time} 全量扫描` : '每日扫描已关';
+    if(s.watch_events_enabled){
       if(s.watch_event_alive){
-        const last = s.watch_event_last ? ' · 最近 ' + s.watch_event_last : '';
-        $('eventPill').textContent = `事件监听中 · 事件 ${s.watch_event_count} 次 · 待处理 ${s.pending_count}${last}`;
+        $('eventPill').textContent = `事件监听中 · ${s.watch_event_count} 次事件 · 待处理 ${s.pending_count}`;
         $('eventPill').className = 'pill ok';
       }else{
-        $('eventPill').textContent = '事件监听未启动 · ' + (s.watch_event_error || '退化为定时扫描');
+        $('eventPill').textContent = '事件监听未启动 · ' + (s.watch_event_error || '只看每日扫描');
         $('eventPill').className = 'pill bad';
       }
     }else{
-      $('eventPill').textContent = `定时扫描 · 每 ${s.scan_interval_sec} 秒全量扫一次`;
+      $('eventPill').textContent = '文件事件已关闭 · ' + daily;
       $('eventPill').className = 'pill';
     }
 

@@ -165,11 +165,12 @@ def api_status() -> Dict[str, Any]:
         "tasks": cfg.get("tasks") or [],
         "task_count": len([t for t in (cfg.get("tasks") or []) if t.get("enabled", True)]),
         "delete_source": bool(cfg.get("delete_source", True)),
-        "retry_time": cfg.get("retry_time"),
+        "daily_scan_enabled": bool(cfg.get("daily_scan_enabled", True)),
+        "daily_scan_time": cfg.get("daily_scan_time"),
+        "last_daily_scan": worker.state.get("last_daily_scan") or "",
         "cleanup_enabled": cfg.get("cleanup_enabled"),
         "cleanup_time": cfg.get("cleanup_time"),
-        "scan_interval_sec": cfg.get("scan_interval_sec"),
-        "watch_mode": cfg.get("watch_mode"),
+        "watch_events_enabled": bool(cfg.get("watch_events_enabled", True)),
         "watch_event_alive": worker._watcher_alive(),
         "watch_event_error": worker.event_state.get("error") or "",
         "watch_event_count": worker.event_state.get("count") or 0,
@@ -234,7 +235,7 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def api_run(force: bool = Query(True)) -> Dict[str, Any]:
     if not client.is_authorized():
         raise HTTPException(status_code=400, detail="115 未授权，请先扫码登录")
-    results = worker.run_once(force=bool(force))
+    results = worker.run_once(skip_stable=not bool(force))
     return {"ok": True, "count": len(results), "results": results}
 
 

@@ -95,21 +95,16 @@ class Worker:
 
     def _loop(self) -> None:
         """
-        事件模式：每 2 秒处理一次"已写稳"的文件事件，另外每 scan_interval_sec 做一次兜底全量扫描
-        轮询模式：完全按 scan_interval_sec 全量扫描
+        只有三种触发方式，不做周期性扫盘：
+          1. 下载器任务完成（Transmission 推过来）
+          2. 文件系统事件（inotify）
+          3. 每天固定时间全量扫一次
         """
-        last_full_scan = 0.0
         while not self._stop.is_set():
             cfg = get_settings()
-            mode = str(cfg.get("watch_mode") or "event")
-            event_mode = mode == "event" and self._watcher_alive()
             try:
                 if cfg.get("enabled"):
-                    full_interval = max(30, int(cfg.get("scan_interval_sec") or 900))
-                    if not event_mode or time.time() - last_full_scan >= full_interval:
-                        self.run_once()
-                        last_full_scan = time.time()
-                    elif event_mode:
+                    if cfg.get("watch_events_enabled", True):
                         self._flush_events(cfg)
                     if self._forced:
                         buckets = {
@@ -121,12 +116,36 @@ class Worker:
                         if buckets:
                             logger_line = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
                             print(f"[worker] 下载器已完成，立即处理 {logger_line}")
-                            self.run_once(force=True, event_files=buckets)
+                            self.run_once(skip_stable=True, event_files=buckets)
+                    self._maybe_daily_scan(cfg)
                     self._maybe_cleanup(cfg)
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
                 print(f"[worker] 本轮出错：{err}")
-            self._stop.wait(2 if event_mode else 10)
+            self._stop.wait(2)
+
+    def _maybe_daily_scan(self, cfg: Dict[str, Any]) -> None:
+        """
+        每天到了设定时间，把监控目录完整扫一遍：
+        处理"从别处移进来"的文件，也顺手重试之前秒传失败的文件。
+        正在写入的文件会被 stable_seconds 挡掉
+        """
+        if not cfg.get("daily_scan_enabled", True):
+            return
+        parsed = parse_hhmm(str(cfg.get("daily_scan_time") or "09:00"))
+        if not parsed:
+            return
+        now = datetime.now()
+        today_key = now.strftime("%Y-%m-%d")
+        if self.state.get("last_daily_scan") == today_key:
+            return
+        if (now.hour, now.minute) < parsed:
+            return
+        self.state["last_daily_scan"] = today_key
+        self._persist()
+        print(f"[worker] 每日定时扫描开始（{cfg.get('daily_scan_time')}）")
+        results = self.run_once()
+        print(f"[worker] 每日定时扫描结束，处理 {len(results)} 个文件")
 
     # ---------------------------------------------------------------- 文件系统事件
 
@@ -138,7 +157,7 @@ class Worker:
         用 watchfiles(inotify) 监听各任务的监控目录。事件只做记录，真正的处理交给 _flush_events
         """
         cfg = get_settings()
-        if str(cfg.get("watch_mode") or "event") != "event":
+        if not cfg.get("watch_events_enabled", True):
             return
         if self._watcher_alive():
             return
@@ -191,7 +210,7 @@ class Worker:
         """
         self._stop_watcher()
         self._stop_poller()
-        if str(get_settings().get("watch_mode") or "event") == "event":
+        if get_settings().get("watch_events_enabled", True):
             self._start_watcher()
         self._start_poller()
 
@@ -258,13 +277,13 @@ class Worker:
                 except Exception:
                     continue
         if buckets:
-            self.run_once(force=True, event_files=buckets)
+            self.run_once(skip_stable=True, event_files=buckets)
 
     # ---------------------------------------------------------------- 主流程
 
     def run_once(
         self,
-        force: bool = False,
+        skip_stable: bool = False,
         event_files: Optional[Dict[str, List[Path]]] = None,
     ) -> List[Dict[str, Any]]:
         if self.running_scan:
@@ -309,7 +328,7 @@ class Worker:
                     if self._stop.is_set():
                         break
                     try:
-                        item = self._process(path, watch, cid, cfg, force, task)
+                        item = self._process(path, watch, cid, cfg, skip_stable, task)
                     except Exception as err:
                         item = {
                             "file": path.name,
@@ -343,7 +362,7 @@ class Worker:
         watch: Path,
         cid: str,
         cfg: Dict[str, Any],
-        force: bool,
+        skip_stable: bool,
         task: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         task = task or {}
@@ -375,17 +394,10 @@ class Worker:
         if record.get("status") == "done":
             return None
 
-        # 文件可能还在写入
+        # 文件可能还在写入（下载器/文件事件触发时已知写完，跳过这个检查）
         stable = max(0, int(cfg.get("stable_seconds") or 0))
-        if not force and stable and time.time() - mtime < stable:
+        if not skip_stable and stable and time.time() - mtime < stable:
             return None
-
-        # 不能秒传的，等到「第二天 retry_time」再试
-        last_try = float(record.get("last_try") or 0)
-        if not force and last_try:
-            next_at = self._next_retry_ts(last_try, str(cfg.get("retry_time") or "09:00"))
-            if next_at and time.time() < next_at:
-                return None
 
         # 网盘已有同名文件
         try:
@@ -434,10 +446,7 @@ class Worker:
             }
 
         if detail.startswith("115 上没有相同内容"):
-            next_at = self._next_retry_ts(record["last_try"], str(cfg.get("retry_time") or "09:00"))
-            next_text = (
-                time.strftime("%m-%d %H:%M", time.localtime(next_at)) if next_at else "明天"
-            )
+            scan_time = str(cfg.get("daily_scan_time") or "09:00")
             record["status"] = "held"
             record["note"] = detail
             return {
@@ -445,7 +454,7 @@ class Worker:
                 "task": task.get("name") or "",
                 "status": "拦截",
                 "size": fmt_size(size),
-                "note": f"暂不能秒传，{next_text} 再试",
+                "note": f"暂不能秒传，明天 {scan_time} 扫描时再试",
             }
 
         record["note"] = detail
@@ -585,18 +594,6 @@ class Worker:
         except Exception:
             return None
 
-    @staticmethod
-    def _next_retry_ts(last_try: float, retry_time: str) -> Optional[float]:
-        parsed = parse_hhmm(retry_time)
-        if not parsed:
-            return None
-        hour, minute = parsed
-        base = datetime.fromtimestamp(float(last_try or time.time()))
-        target = (base + timedelta(days=1)).replace(
-            hour=hour, minute=minute, second=0, microsecond=0
-        )
-        return target.timestamp()
-
     # ---------------------------------------------------------------- 下载器监控（Transmission）
 
     def _start_poller(self) -> None:
@@ -715,7 +712,6 @@ class Worker:
             if not finished:
                 continue
             if int(torrent.get("error") or 0) != 0:
-                # 任务报错，跳过（下次改好后仍会重新判断）
                 continue
             path = self._resolve_download_path(torrent, cfg)
             name = str(torrent.get("name") or "")
@@ -877,10 +873,8 @@ class Worker:
             value = value or {}
             last_try = float(value.get("last_try") or 0)
             next_text = ""
-            if value.get("status") == "held" and last_try:
-                next_at = self._next_retry_ts(last_try, str(cfg.get("retry_time") or "09:00"))
-                if next_at:
-                    next_text = time.strftime("%m-%d %H:%M", time.localtime(next_at))
+            if value.get("status") == "held":
+                next_text = "每天 " + str(cfg.get("daily_scan_time") or "09:00")
             task_id, _, rel = key.partition("|")
             rows.append(
                 {
