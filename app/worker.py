@@ -347,6 +347,9 @@ class Worker:
                         }
                         self.last_error = str(err)
                     if item:
+                        item.setdefault(
+                            "cms", bool(task.get("cms_notify", True))
+                        )
                         results.append(item)
                     self._persist()
 

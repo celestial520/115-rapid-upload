@@ -207,8 +207,10 @@ def notify_batch(results: List[Dict[str, Any]]) -> List[str]:
         if err:
             errors.append(err)
 
-    # 只有真的往 115 里写了东西，才需要让 CMS 同步
-    if succeeded:
+    # 只有真的往 115 里写了东西，才需要让 CMS 同步；
+    # 任务可以单独关掉（比如下载目录只做秒传、不进媒体库）
+    cms_items = [r for r in succeeded if r.get("cms", True)]
+    if cms_items:
         cms_err = trigger_cms()
         if cms_err:
             errors.append(cms_err)
