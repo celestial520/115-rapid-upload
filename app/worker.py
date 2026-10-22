@@ -5,7 +5,7 @@ import hashlib
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -65,11 +65,13 @@ class Worker:
         self._forced: Dict[str, Dict[str, Path]] = {}
         # 每个待处理路径是被谁触发的：tr / mp
         self._forced_src: Dict[str, str] = {}
+        self._forced_lock = threading.Lock()
         self._poll_stop: Optional[threading.Event] = None
         self._poll_thread: Optional[threading.Thread] = None
         self._tr_session = ""
         # 还在下载中的种子路径：这些路径下的文件先不处理，等整个种子下完
         self._tr_incomplete: set = set()
+        self._tr_incomplete_at: float = 0.0
         self.tr_state: Dict[str, Any] = {
             "connected": False,
             "error": "",
@@ -114,13 +116,16 @@ class Worker:
                     if cfg.get("watch_events_enabled", True):
                         self._flush_events(cfg)
                     if self._forced:
+                        with self._forced_lock:
+                            snapshot = self._forced
+                            snapshot_src = self._forced_src
+                            self._forced = {}
+                            self._forced_src = {}
                         groups: Dict[str, Dict[str, List[Path]]] = {}
-                        for task_id, paths in self._forced.items():
+                        for task_id, paths in snapshot.items():
                             for path in paths.values():
-                                src = self._forced_src.get(path.as_posix(), "tr")
+                                src = snapshot_src.get(path.as_posix(), "tr")
                                 groups.setdefault(src, {}).setdefault(task_id, []).append(path)
-                        self._forced = {}
-                        self._forced_src = {}
                         for src, buckets in groups.items():
                             label = "下载器完成" if src == "tr" else "MP 整理完成"
                             detail = "、".join(f"{k}:{len(v)}" for k, v in buckets.items())
@@ -171,7 +176,7 @@ class Worker:
         if self._watcher_alive():
             return
         try:
-            import watchfiles  # noqa: F401
+            import watchfiles  # noqa: F401  # 只用来确认依赖存在
         except Exception as err:
             self.event_state["error"] = f"watchfiles 不可用，已退化为定时扫描：{err}"
             logger.warning(f"[worker] {self.event_state['error']}")
@@ -635,6 +640,10 @@ class Worker:
         """
         if not self._tr_incomplete:
             return False
+        # 下载器长时间连不上时，这份名单会过期，避免文件被永久跳过
+        if time.time() - self._tr_incomplete_at > 1800:
+            self._tr_incomplete = set()
+            return False
         try:
             text = Path(path).as_posix()
         except Exception:
@@ -814,6 +823,7 @@ class Worker:
                 f"[worker] 仍在下载中的种子 {len(new_incomplete)} 个，其中的文件暂不处理"
             )
         self._tr_incomplete = new_incomplete
+        self._tr_incomplete_at = time.time()
 
         # 第二遍：处理已完成的任务
         for torrent in torrents:
@@ -866,11 +876,12 @@ class Worker:
                     }
                     logger.info(f"[worker] 下载完成，但不在任何监控目录里：{path}")
                 continue
-            for task_id, items in buckets.items():
-                self._forced.setdefault(task_id, {})
-                for item in items:
-                    self._forced[task_id][item.as_posix()] = item
-                    self._forced_src[item.as_posix()] = "tr"
+            with self._forced_lock:
+                for task_id, items in buckets.items():
+                    self._forced.setdefault(task_id, {})
+                    for item in items:
+                        self._forced[task_id][item.as_posix()] = item
+                        self._forced_src[item.as_posix()] = "tr"
             missing.pop(torrent_hash, None)
             done_map[torrent_hash] = time.time()
             self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
@@ -981,6 +992,14 @@ class Worker:
 
     def _persist(self) -> None:
         with self._lock:
+            # 已处理的下载任务只保留最近 5000 条，避免 state.json 无限膨胀
+            done = self.state.get("tr_done")
+            if isinstance(done, dict) and len(done) > 5000:
+                keep = sorted(done.items(), key=lambda kv: kv[1], reverse=True)[:4000]
+                self.state["tr_done"] = dict(keep)
+            missing_tr = self.tr_state.get("missing")
+            if isinstance(missing_tr, dict) and len(missing_tr) > 200:
+                self.tr_state["missing"] = dict(list(missing_tr.items())[-100:])
             files = self.state.get("files") or {}
             if len(files) > 2000:
                 keep = sorted(

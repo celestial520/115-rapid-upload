@@ -113,6 +113,7 @@ def load_settings() -> Dict[str, Any]:
                         ]
             except Exception as err:  # 配置坏了就用默认值，别让服务起不来
                 _log().warning(f"读取配置失败，使用默认值：{err}")
+        merged = sanitize(merged)
         _settings = merged
         return merged
 
@@ -123,13 +124,147 @@ def get_settings() -> Dict[str, Any]:
     return _settings
 
 
+_BOOL_FIELDS = {
+    "enabled",
+    "delete_source",
+    "real_upload",
+    "watch_events_enabled",
+    "recursive",
+    "daily_scan_enabled",
+    "cleanup_enabled",
+    "notify_on_hold",
+    "tr_enabled",
+    "wecom_enabled",
+    "cms_enabled",
+}
+_INT_FIELDS = {
+    "min_size_mb": (0, 1024 * 1024),
+    "stable_seconds": (0, 86400),
+    "tr_poll_sec": (5, 3600),
+}
+_URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
+_STR_FIELDS = {
+    "daily_scan_time",
+    "cleanup_time",
+    "u115_client_id",
+    "wecom_corpid",
+    "wecom_secret",
+    "wecom_agentid",
+    "wecom_touser",
+    "cms_token",
+    "cms_type",
+    "tr_username",
+    "tr_password",
+}
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
+
+
+def _norm_url(value: Any, scheme: str = "http") -> str:
+    """
+    地址没写 http:// 时自动补上，否则 requests 会直接抛 MissingSchema
+    """
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"{scheme}://{text}"
+    return text
+
+
+def _to_int(value: Any, low: int, high: int, default: int) -> int:
+    try:
+        number = int(float(str(value).strip()))
+    except Exception:
+        return default
+    return max(low, min(high, number))
+
+
+def normalize_tasks(value: Any) -> list:
+    """
+    任务列表清洗：只留下合法字段，类型不对的直接丢掉
+    """
+    result = []
+    if not isinstance(value, list):
+        return result
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        watch = str(item.get("watch_dir") or "").strip()
+        if not watch:
+            continue
+        target = str(item.get("target_dir") or "").strip() or "/"
+        if not target.startswith("/"):
+            target = "/" + target
+        result.append(
+            {
+                "id": str(item.get("id") or f"t{index + 1}"),
+                "name": str(item.get("name") or watch).strip(),
+                "watch_dir": watch,
+                "target_dir": target,
+                "enabled": _to_bool(item.get("enabled", True)),
+                "keep_source": _to_bool(item.get("keep_source", False)),
+                "cms_notify": _to_bool(item.get("cms_notify", True)),
+            }
+        )
+    return result
+
+
+def normalize_path_map(value: Any) -> list:
+    """
+    下载器路径映射清洗：[{from, to}]
+    """
+    result = []
+    if not isinstance(value, list):
+        return result
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        src = str(item.get("from") or "").strip()
+        dst = str(item.get("to") or "").strip()
+        if src and dst:
+            result.append({"from": src.rstrip("/") or "/", "to": dst.rstrip("/") or "/"})
+    return result
+
+
+def sanitize(new_values: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    把前端传来的值转成正确类型，避免脏数据把后台跑挂
+    """
+    cleaned: Dict[str, Any] = {}
+    for key, value in (new_values or {}).items():
+        if key not in DEFAULTS:
+            continue
+        if key == "tasks":
+            cleaned["tasks"] = normalize_tasks(value)
+        elif key == "tr_path_map":
+            cleaned["tr_path_map"] = normalize_path_map(value)
+        elif key in _BOOL_FIELDS:
+            cleaned[key] = _to_bool(value)
+        elif key in _INT_FIELDS:
+            low, high = _INT_FIELDS[key]
+            cleaned[key] = _to_int(value, low, high, DEFAULTS[key])
+        elif key in _URL_FIELDS:
+            cleaned[key] = _norm_url(value)
+        elif key == "cms_type":
+            text = str(value or "").strip()
+            cleaned[key] = text if text in ("lift_sync", "auto_organize") else DEFAULTS[key]
+        elif key in _STR_FIELDS:
+            cleaned[key] = str(value if value is not None else "").strip()
+    return cleaned
+
+
 def save_settings(new_values: Dict[str, Any]) -> Dict[str, Any]:
     global _settings
     with _lock:
         merged = dict(_settings or DEFAULTS)
-        for key, value in (new_values or {}).items():
-            if key in DEFAULTS:
-                merged[key] = value
+        merged.update(sanitize(new_values))
         _settings = merged
         _atomic_write(SETTINGS_FILE, merged)
         return merged

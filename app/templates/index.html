@@ -481,13 +481,17 @@ async function refresh(){
   }catch(e){ console.warn(e); }
 }
 
-async function loadSettings(){
+let settingsLoaded = false;
+
+async function loadSettings(force){
+  if(settingsLoaded && !force) return;
   const s = await api('/api/settings');
   settings = s.settings;
   tasks = (s.settings.tasks || []).map(t => ({...t}));
   renderTasks();
   pathMaps = (s.settings.tr_path_map || []).map(m => ({...m}));
   renderMaps();
+  settingsLoaded = true;
   for(const key of Object.keys(settings)){
     const el = $(key);
     if(!el) continue;
@@ -659,7 +663,8 @@ $('btnSave').onclick = async () => {
   $('saveTip').textContent = '保存中…';
   $('setErr').textContent = '';
   try{
-    await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    const resp = await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    if(resp && resp.settings) settings = resp.settings;   // 只更新内存里的基准，不重绘表单
     $('saveTip').textContent = '已保存 ' + new Date().toLocaleTimeString();
     refresh();
   }catch(e){

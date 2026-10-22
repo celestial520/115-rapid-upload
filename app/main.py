@@ -1,11 +1,10 @@
 """
 115秒传助手 · Web 控制台
 """
-import base64
 import io
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import qrcode
 import qrcode.image.svg
@@ -65,14 +64,37 @@ def login_page(request: Request) -> Response:
     return HTMLResponse(LOGIN_TEMPLATE.read_text(encoding="utf-8"))
 
 
+_login_fail: Dict[str, Dict[str, float]] = {}
+_LOGIN_MAX_DELAY = 3.0
+
+
+def _login_throttle(client_key: str, failed: bool) -> None:
+    """
+    登录失败次数越多，下一次越慢，挡一下暴力破解
+    """
+    import time as _time
+
+    record = _login_fail.setdefault(client_key, {"count": 0, "last": 0.0})
+    if not failed:
+        record["count"] = 0
+        return
+    record["count"] = min(record["count"] + 1, 20)
+    record["last"] = _time.time()
+    if record["count"] >= 5:
+        _time.sleep(min(_LOGIN_MAX_DELAY, 0.4 * (record["count"] - 4)))
+
+
 @app.post("/api/login")
-def api_login(payload: Dict[str, Any] = Body(...)) -> Response:
+def api_login(payload: Dict[str, Any] = Body(...), request: Request = None) -> Response:
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
+    client_key = (request.client.host if request and request.client else "unknown")
     if not auth.verify(username, password):
-        logger.warning(f"网页登录失败：{username or '(空)'}")
+        logger.warning(f"网页登录失败：{username or '(空)'}（来自 {client_key}）")
+        _login_throttle(client_key, True)
         raise HTTPException(status_code=401, detail="账号或密码不正确")
-    logger.info(f"网页登录成功：{username}")
+    _login_throttle(client_key, False)
+    logger.info(f"网页登录成功：{username}（来自 {client_key}）")
     token = auth.issue_token(username)
     response = JSONResponse({"ok": True, "username": username})
     response.set_cookie(
@@ -87,7 +109,7 @@ def api_login(payload: Dict[str, Any] = Body(...)) -> Response:
 
 
 @app.post("/api/logout")
-def api_logout() -> Response:
+def api_web_logout() -> Response:
     response = JSONResponse({"ok": True})
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
@@ -272,6 +294,8 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @app.post("/api/run")
 def api_run(force: bool = Query(True)) -> Dict[str, Any]:
+    if worker.running_scan:
+        raise HTTPException(status_code=409, detail="上一轮还在处理中，稍等几秒再试")
     if not client.is_authorized():
         raise HTTPException(status_code=400, detail="115 未授权，请先扫码登录")
     logger.info(f"手动触发扫描（跳过静置={bool(force)}）")
@@ -316,7 +340,8 @@ def api_qrcode_status() -> Dict[str, Any]:
 
 
 @app.post("/api/115/logout")
-def api_logout() -> Dict[str, Any]:
+def api_u115_logout() -> Dict[str, Any]:
+    logger.info("已退出 115 授权，需要重新扫码")
     client.logout()
     return {"ok": True}
 
