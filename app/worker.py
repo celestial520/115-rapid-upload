@@ -1000,6 +1000,11 @@ class Worker:
     def files_view(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
         cfg = get_settings()
+        task_names = {
+            str(t.get("id") or "default"): (t.get("name") or "")
+            for t in (cfg.get("tasks") or [])
+            if isinstance(t, dict)
+        }
         for key, value in (self.state.get("files") or {}).items():
             value = value or {}
             last_try = float(value.get("last_try") or 0)
@@ -1011,6 +1016,7 @@ class Worker:
                 {
                     "key": rel or key,
                     "task": task_id,
+                    "task_name": task_names.get(task_id) or task_id,
                     "source": value.get("source") or "",
                     "size": fmt_size(int(value.get("size") or 0)),
                     "status": value.get("status") or "",

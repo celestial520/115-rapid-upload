@@ -8,6 +8,20 @@
   :root{
     --bg:#f5f6f8; --card:#fff; --line:#e5e7eb; --text:#1f2329; --muted:#6b7280;
     --primary:#2563eb; --ok:#16a34a; --warn:#d97706; --err:#dc2626;
+    --chip:#f8fafc; --hover:#f8fafc; --code:#f3f4f6;
+    --tab-on:#eef2ff; --tab-on-border:#c7d2fe;
+    --term-bg:#0f172a; --term-fg:#e2e8f0;
+    --shadow:0 10px 30px rgba(15,23,42,.06);
+    color-scheme: light;
+  }
+  [data-theme="dark"]{
+    --bg:#0f1420; --card:#171e2b; --line:#2a3444; --text:#e6ebf3; --muted:#94a3b8;
+    --primary:#60a5fa; --ok:#4ade80; --warn:#fbbf24; --err:#f87171;
+    --chip:#1e2735; --hover:#1e2735; --code:#1e2735;
+    --tab-on:#1e3a8a; --tab-on-border:#1d4ed8;
+    --term-bg:#0b0f17; --term-fg:#cbd5e1;
+    --shadow:0 10px 30px rgba(0,0,0,.45);
+    color-scheme: dark;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);
@@ -15,12 +29,12 @@
   .wrap{max-width:1080px;margin:0 auto;padding:20px}
   header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
   h1{font-size:19px;margin:0;font-weight:600}
-  .pill{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted)}
-  .pill.ok{color:var(--ok);border-color:#bbf7d0;background:#f0fdf4}
-  .pill.bad{color:var(--err);border-color:#fecaca;background:#fef2f2}
+  .pill{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:var(--line);background:var(--chip)}
+  .pill.bad{color:var(--err);border-color:var(--line);background:var(--chip)}
   .spacer{flex:1}
   button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
-         background:#fff;cursor:pointer;color:var(--text)}
+         background:var(--card);cursor:pointer;color:var(--text)}
   button:hover{border-color:#cbd5e1}
   button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
   button.primary:hover{filter:brightness(1.05)}
@@ -30,7 +44,7 @@
   .card .k{color:var(--muted);font-size:12px;margin-bottom:4px}
   .card .v{font-size:15px;font-weight:600;word-break:break-all}
   .tabs{display:flex;gap:6px;margin-bottom:12px}
-  .tabs button.on{background:#eef2ff;border-color:#c7d2fe;color:var(--primary)}
+  .tabs button.on{background:var(--tab-on);border-color:var(--tab-on-border);color:var(--primary)}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -42,7 +56,7 @@
   label.f span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
   input[type=text],input[type=password],input[type=number],input[type=time],select{
     width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-    font:inherit;background:#fff;color:var(--text)}
+    font:inherit;background:var(--card);color:var(--text)}
   input:focus,select:focus{outline:2px solid #bfdbfe;border-color:#93c5fd}
   .row-inline{display:flex;gap:8px}
   .row-inline input{flex:1}
@@ -50,25 +64,25 @@
   .check input{width:16px;height:16px}
   .divider{height:1px;background:var(--line);margin:18px 0}
   h3{font-size:13px;color:var(--muted);font-weight:600;margin:0 0 10px;letter-spacing:.4px}
-  .modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+  .modal{position:fixed;inset:0;background:rgba(8,12,20,.55);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
   .modal.show{display:flex}
-  .modal .box{background:#fff;border-radius:14px;width:min(460px,100%);padding:20px;max-height:86vh;overflow:auto}
+  .modal .box{background:var(--card);border-radius:14px;width:min(460px,100%);padding:20px;max-height:86vh;overflow:auto}
   .modal .box h2{font-size:16px;margin:0 0 12px}
   #qrimg{display:flex;justify-content:center;margin:10px 0}
   #qrimg svg{width:220px;height:220px}
   .dirlist{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin:10px 0}
   .dirlist div{padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
   .dirlist div:last-child{border-bottom:none}
-  .dirlist div:hover{background:#f8fafc}
+  .dirlist div:hover{background:var(--hover)}
   .muted{color:var(--muted);font-size:12px}
-  #logBox{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px;font-size:12px;
+  #logBox{background:var(--term-bg);color:var(--term-fg);border-radius:10px;padding:14px;font-size:12px;
           line-height:1.55;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all;
           font-family:ui-monospace,Consolas,Menlo,monospace;margin:0}
   .logbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
   .logbar select,.logbar input{padding:7px 9px;border:1px solid var(--line);border-radius:8px;font:inherit}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
   .chip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;
-        background:#f8fafc;cursor:pointer;color:var(--text)}
+        background:var(--chip);cursor:pointer;color:var(--text)}
   .chip:hover{border-color:#93c5fd;color:var(--primary)}
   .chip .fs{color:var(--muted);margin-left:4px;font-size:11px}
   .task-row{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto auto auto;gap:8px;
@@ -100,8 +114,19 @@
     .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
     .tabs button{flex:0 0 auto;white-space:nowrap}
     .panel{padding:14px}
-    .col-hide{display:none}
-    .row-note{display:block;margin-top:3px;line-height:1.4}
+    /* 文件列表改成卡片 */
+    thead{display:none}
+    table,tbody{display:block;width:100%}
+    tbody tr{display:flex;flex-wrap:wrap;gap:4px 10px;border:1px solid var(--line);
+             border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--card)}
+    tbody td{border:none;padding:0;display:block}
+    td.c-file{order:1;flex:0 0 100%;font-size:13px;line-height:1.45;word-break:break-word}
+    td.c-meta{order:2;flex:0 0 auto;font-size:12px;color:var(--muted);white-space:nowrap}
+    td.c-status{order:2;flex:0 0 auto;font-size:12px;white-space:nowrap}
+    td.col-hide{display:none!important}
+    .row-note{display:block;margin-top:3px;line-height:1.4;font-size:12px;color:var(--muted)}
+    .chip{white-space:nowrap}
+    .task-id{max-width:120px;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
     table{font-size:12px}
     th,td{padding:8px 6px}
     .row-inline{flex-wrap:wrap}
@@ -112,7 +137,7 @@
     .logbar select,.logbar input{flex:1 1 140px}
   }
   .err{color:var(--err);font-size:13px;margin-top:10px;white-space:pre-wrap}
-  code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:12px}
 </style>
 </head>
 <body>
@@ -127,6 +152,7 @@
     <button id="btnRun">立即运行一次</button>
     <button id="btnQr" class="primary">扫码登录 115</button>
     <button id="btnU115Logout">退出 115 授权</button>
+    <button id="btnTheme" title="切换主题">🌗 自动</button>
     <button id="btnSignOut">退出登录</button>
   </header>
 
@@ -165,7 +191,7 @@
         <option value="1000">最近 1000 行</option>
         <option value="2000">最近 2000 行</option>
       </select>
-      <input type="text" id="logKeyword" placeholder="关键字过滤，如 ERROR、秒传、外部触发">
+      <input type="text" id="logKeyword" placeholder="关键字过滤，如 ERROR、秒传、CMS">
       <button type="button" id="btnLogRefresh">刷新</button>
       <button type="button" id="btnLogDownload">下载完整日志</button>
       <span id="logTip" class="muted"></span>
@@ -222,20 +248,6 @@
       <span id="trTip" class="muted"></span>
     </div>
     <div id="trUnmatched" class="err" style="margin-top:8px"></div>
-
-    <div class="divider"></div>
-    <h3>外部触发（MoviePilot 插件用）</h3>
-    <div class="grid">
-      <label class="f"><span>API Key</span>
-        <div class="row-inline">
-          <input type="text" id="api_key" readonly>
-          <button type="button" id="btnCopyKey">复制</button>
-          <button type="button" id="btnResetKey">重置</button>
-        </div>
-        <span class="muted">把「本机地址:9191」「这个 Key」和「路径映射」填到 MP 插件里，
-          插件整理完就会直接推送路径过来，不用等扫描</span>
-      </label>
-    </div>
 
     <div class="divider"></div>
     <h3>清理与通知</h3>
@@ -443,11 +455,15 @@ async function refresh(){
 
     const rows = (s.files||[]).map(f => {
       const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
-      return `<tr><td>${f.task||''}</td>
-              <td>${f.key}${f.note ? `<div class="muted row-note">${f.note}</div>` : ''}</td>
-              <td><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
-              <td class="col-hide">${f.size}</td><td>${badge}</td><td class="col-hide">${f.tries}</td>
-              <td class="col-hide">${f.last_try||''}</td><td class="col-hide">${f.next_try||''}</td>
+      return `<tr>
+              <td class="c-meta c-task"><span class="task-id" title="${f.task||''}">${f.task_name || f.task || ''}</span></td>
+              <td class="c-file">${f.key}${f.note ? `<div class="row-note">${f.note}</div>` : ''}</td>
+              <td class="c-meta"><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
+              <td class="col-hide">${f.size}</td>
+              <td class="c-status">${badge}</td>
+              <td class="col-hide">${f.tries}</td>
+              <td class="col-hide">${f.last_try||''}</td>
+              <td class="col-hide">${f.next_try||''}</td>
               <td class="col-hide">${f.note||''}</td></tr>`;
     }).join('');
     $('fileRows').innerHTML = rows || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
@@ -581,29 +597,6 @@ function readMapsFromDom(){
     }))
     .filter(m => m.from);
 }
-
-$('btnCopyKey').onclick = async () => {
-  const val = $('api_key').value;
-  try{
-    await navigator.clipboard.writeText(val);
-    $('trTip').textContent = 'API Key 已复制';
-  }catch(e){
-    $('api_key').select();
-    document.execCommand('copy');
-    $('trTip').textContent = 'API Key 已复制';
-  }
-};
-
-$('btnResetKey').onclick = async () => {
-  if(!confirm('重置后 MP 插件里的 Key 会失效，需要同步修改。继续？')) return;
-  try{
-    const r = await api('/api/apikey/reset', {method:'POST'});
-    $('api_key').value = r.api_key;
-    $('trTip').textContent = 'API Key 已重置，记得去 MP 插件里更新';
-  }catch(e){
-    $('trTip').textContent = '重置失败：' + e.message;
-  }
-};
 
 $('btnAddMap').onclick = () => {
   pathMaps.push({ from: '', to: '' });
@@ -833,6 +826,34 @@ async function loadAccount(){
     $('whoami').textContent = r.username || '';
   }catch(e){}
 }
+
+// ---------------- 主题 ----------------
+const THEME_KEY = 'u115_theme';
+const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyTheme(mode){
+  const resolved = mode === 'auto' ? (themeMedia.matches ? 'dark' : 'light') : mode;
+  document.documentElement.dataset.theme = resolved;
+  const btn = $('btnTheme');
+  if(btn){
+    btn.textContent = mode === 'auto' ? '🌗 自动' : (mode === 'dark' ? '🌙 夜间' : '☀️ 白天');
+    btn.title = '当前：' + (mode === 'auto' ? '跟随系统' : (mode === 'dark' ? '夜间模式' : '白天模式')) + '（点击切换）';
+  }
+  return mode;
+}
+
+function currentTheme(){ return localStorage.getItem(THEME_KEY) || 'auto'; }
+
+function cycleTheme(){
+  const order = ['auto', 'light', 'dark'];
+  const next = order[(order.indexOf(currentTheme()) + 1) % order.length];
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+}
+
+$('btnTheme').onclick = cycleTheme;
+themeMedia.addEventListener('change', () => { if(currentTheme() === 'auto') applyTheme('auto'); });
+applyTheme(currentTheme());
 
 // 初始化
 loadMounts();

@@ -48,8 +48,6 @@ DEFAULTS: Dict[str, Any] = {
     # ---- 空目录清理 ----
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
-    # ---- 外部触发（给 MoviePilot 插件用）----
-    "api_key": "",                    # 首次启动自动生成
     # ---- 115 开放平台 ----
     "u115_client_id": "100197847",
     # ---- Transmission 下载器监控 ----
@@ -117,21 +115,6 @@ def load_settings() -> Dict[str, Any]:
                 _log().warning(f"读取配置失败，使用默认值：{err}")
         _settings = merged
         return merged
-
-
-def ensure_api_key() -> str:
-    """
-    保证有一个外部触发密钥；没有就生成并落盘
-    """
-    import secrets
-
-    settings = get_settings()
-    key = str(settings.get("api_key") or "").strip()
-    if key:
-        return key
-    key = secrets.token_hex(24)
-    save_settings({"api_key": key})
-    return key
 
 
 def get_settings() -> Dict[str, Any]:
