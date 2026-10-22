@@ -1,9 +1,8 @@
 services:
   u115-rapid:
     image: ghcr.io/celestial520/115-rapid-upload:latest
-    # 想自己本地构建：把上面 image 注释掉，打开下面这行
-    # build: .
-    container_name: 115-rapid-assistant
+    # build: .                        # 想自己编译就注释掉上面这行、打开这行
+    container_name: u115-rapid
     restart: unless-stopped
     ports:
       - "9191:9191"
@@ -12,5 +11,5 @@ services:
       DATA_DIR: /config
     volumes:
       - ./config:/config
-      # 左边改成你自己的下载目录，右边建议保持 /watch
-      - /volume1/115:/watch
+      - /volume1/media/已整理:/watch     # ← 改成你的媒体库目录（MP 整理后的）
+      - /volume1/download:/9kg           # ← 改成你的下载目录（不需要可删）

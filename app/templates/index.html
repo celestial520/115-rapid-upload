@@ -78,9 +78,38 @@
   .task-row .chk{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap}
   .task-head{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto auto auto;gap:8px;
              font-size:12px;color:var(--muted);padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .row-note{display:none}
   @media(max-width:780px){
     .task-head{display:none}
-    .task-row{grid-template-columns:1fr 1fr;gap:6px}
+    .task-row{grid-template-columns:1fr;gap:6px;padding:10px;border:1px solid var(--line);
+              border-radius:10px;margin-bottom:10px}
+  }
+
+  /* ---------- 手机端 ---------- */
+  @media(max-width:720px){
+    .wrap{padding:12px}
+    header{gap:8px}
+    header h1{font-size:17px;width:100%}
+    header .spacer{display:none}
+    header button{padding:6px 10px;font-size:13px}
+    .pill{font-size:11px}
+    .cards{grid-template-columns:1fr 1fr;gap:8px}
+    .card{padding:10px 12px}
+    .card .v{font-size:13px}
+    .grid{grid-template-columns:1fr}
+    .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
+    .tabs button{flex:0 0 auto;white-space:nowrap}
+    .panel{padding:14px}
+    .col-hide{display:none}
+    .row-note{display:block;margin-top:3px;line-height:1.4}
+    table{font-size:12px}
+    th,td{padding:8px 6px}
+    .row-inline{flex-wrap:wrap}
+    .row-inline button{flex:0 0 auto}
+    .modal .box{width:100%;padding:16px}
+    #logBox{max-height:55vh;font-size:11px;padding:10px}
+    .logbar{gap:6px}
+    .logbar select,.logbar input{flex:1 1 140px}
   }
   .err{color:var(--err);font-size:13px;margin-top:10px;white-space:pre-wrap}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
@@ -119,7 +148,7 @@
       只记录"处理过"的文件：<code>done</code> 秒传成功；<code>held</code> 被拦截等下次重试。
     </div>
     <table>
-      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th>大小</th><th>状态</th><th>尝试</th><th>上次</th><th>下次</th><th>说明</th></tr></thead>
+      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th class="col-hide">大小</th><th>状态</th><th class="col-hide">尝试</th><th class="col-hide">上次</th><th class="col-hide">下次</th><th class="col-hide">说明</th></tr></thead>
       <tbody id="fileRows"><tr><td colspan="9" class="empty">暂无记录</td></tr></tbody>
     </table>
     <div id="lastResults" style="margin-top:18px"></div>
@@ -414,9 +443,12 @@ async function refresh(){
 
     const rows = (s.files||[]).map(f => {
       const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
-      return `<tr><td>${f.task||''}</td><td>${f.key}</td><td><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
-              <td>${f.size}</td><td>${badge}</td><td>${f.tries}</td>
-              <td>${f.last_try||''}</td><td>${f.next_try||''}</td><td>${f.note||''}</td></tr>`;
+      return `<tr><td>${f.task||''}</td>
+              <td>${f.key}${f.note ? `<div class="muted row-note">${f.note}</div>` : ''}</td>
+              <td><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
+              <td class="col-hide">${f.size}</td><td>${badge}</td><td class="col-hide">${f.tries}</td>
+              <td class="col-hide">${f.last_try||''}</td><td class="col-hide">${f.next_try||''}</td>
+              <td class="col-hide">${f.note||''}</td></tr>`;
     }).join('');
     $('fileRows').innerHTML = rows || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
     $('lastResults').innerHTML = '<div class="muted" style="margin-bottom:6px">最近一轮结果</div>' + fmtList(s.last_results);

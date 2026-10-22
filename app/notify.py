@@ -7,11 +7,13 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .config import get_settings
+from .logger import get_logger
 
 _wecom_token_cache: Dict[str, Any] = {"token": "", "expire_at": 0}
 
 
 DEFAULT_WECOM_BASE = "https://qyapi.weixin.qq.com"
+logger = get_logger()
 
 
 def _truncate(text: str, limit: int = 1800) -> str:
@@ -64,7 +66,10 @@ def send_wecom(title: str, content: str, require_enabled: bool = True) -> Option
         )
         data = resp.json()
         if data.get("errcode") not in (0, None):
-            return f"企业微信返回错误：{data.get('errcode')} {data.get('errmsg')}"
+            message = f"企业微信返回错误：{data.get('errcode')} {data.get('errmsg')}"
+            logger.warning(f"[通知] 企业微信发送失败：{message}")
+            return message
+        logger.info(f"[通知] 企业微信已发送：{title}（发给 {touser}）")
         return None
     except Exception as err:
         return f"企业微信发送异常：{err}"
@@ -106,22 +111,30 @@ def trigger_cms() -> Optional[str]:
     sync_type = str(cfg.get("cms_type") or "lift_sync").strip()
     if not (domain and token):
         return "CMS 配置不完整（地址 / token 必填）"
+    url = f"{domain}/api/sync/lift_by_token"
+    logger.info(f"[CMS] 通知增量同步：{domain}（type={sync_type}）")
     try:
-        url = f"{domain}/api/sync/lift_by_token"
         resp = requests.get(
             url, params={"token": token, "type": sync_type}, timeout=20
         )
         if resp.status_code >= 400:
-            return f"CMS 返回 HTTP {resp.status_code}"
+            message = f"CMS 返回 HTTP {resp.status_code}"
+            logger.warning(f"[CMS] 通知失败：{message}")
+            return message
         try:
             data = resp.json()
             if isinstance(data, dict) and data.get("success") is False:
-                return f"CMS 返回失败：{data.get('message') or data}"
+                message = f"CMS 返回失败：{data.get('message') or data}"
+                logger.warning(f"[CMS] 通知失败：{message}")
+                return message
+            logger.info(f"[CMS] 通知成功：{str(data)[:150]}")
         except Exception:
-            pass
+            logger.info(f"[CMS] 通知成功：{(resp.text or '')[:150]}")
         return None
     except Exception as err:
-        return f"CMS 通知异常：{err}"
+        message = f"CMS 通知异常：{err}"
+        logger.warning(f"[CMS] {message}")
+        return message
 
 
 def _build_text(results: List[Dict[str, Any]]) -> tuple:

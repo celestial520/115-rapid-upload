@@ -68,6 +68,8 @@ class Worker:
         self._poll_stop: Optional[threading.Event] = None
         self._poll_thread: Optional[threading.Thread] = None
         self._tr_session = ""
+        # 还在下载中的种子路径：这些路径下的文件先不处理，等整个种子下完
+        self._tr_incomplete: set = set()
         self.tr_state: Dict[str, Any] = {
             "connected": False,
             "error": "",
@@ -353,6 +355,7 @@ class Worker:
                         item.setdefault(
                             "cms", bool(task.get("cms_notify", True))
                         )
+                        self._log_item(task, item)
                         results.append(item)
                     self._persist()
 
@@ -519,6 +522,23 @@ class Worker:
         }
 
     @staticmethod
+    def _log_item(task: Dict[str, Any], item: Dict[str, Any]) -> None:
+        """
+        每个文件的处理结果都单独记一条，排障时能直接搜文件名
+        """
+        name = item.get("file") or ""
+        task_name = task.get("name") or ""
+        prefix = f"[秒传] {task_name}/" if task_name else "[秒传] "
+        note = item.get("note") or ""
+        status = item.get("status")
+        if status == "成功":
+            logger.info(f"{prefix}{name} 成功（{item.get('size') or ''}）：{note}")
+        elif status == "拦截":
+            logger.info(f"{prefix}{name} 暂不能秒传：{note}")
+        else:
+            logger.warning(f"{prefix}{name} 失败：{note}")
+
+    @staticmethod
     def _net_dir_for(task: Dict[str, Any], rel_posix: str) -> str:
         """
         本地相对路径 -> 网盘目录（保持目录结构）
@@ -599,6 +619,8 @@ class Worker:
                 return False
             if name.lower().endswith(self.IGNORE_SUFFIX):
                 return False
+            if self._in_incomplete_torrent(path):
+                return False
             size = path.stat().st_size
             min_size = max(0, int(cfg.get("min_size_mb") or 0)) * 1024 * 1024
             if size <= 0 or size < min_size:
@@ -606,6 +628,21 @@ class Worker:
             return True
         except Exception:
             return False
+
+    def _in_incomplete_torrent(self, path: Path) -> bool:
+        """
+        文件是否属于"还没下完"的种子。是的话先跳过——等整个种子下完再一起秒传
+        """
+        if not self._tr_incomplete:
+            return False
+        try:
+            text = Path(path).as_posix()
+        except Exception:
+            return False
+        for prefix in self._tr_incomplete:
+            if text == prefix or text.startswith(prefix + "/"):
+                return True
+        return False
 
     def _list_candidates(self, watch: Path, cfg: Dict[str, Any]) -> List[Path]:
         """
@@ -757,16 +794,35 @@ class Worker:
         done_map = self.state.setdefault("tr_done", {})
         missing = self.tr_state.setdefault("missing", {})
 
-        for torrent in torrents:
-            torrent_hash = str(torrent.get("hashString") or "")
-            if not torrent_hash or torrent_hash in done_map:
-                continue
-            finished = (
+        def _is_finished(torrent: Dict[str, Any]) -> bool:
+            return (
                 bool(torrent.get("isFinished"))
                 or float(torrent.get("percentDone") or 0) >= 1
                 or int(torrent.get("status") or 0) == 6
             )
-            if not finished:
+
+        # 第一遍：先算清楚"还在下载"的种子，并立刻生效
+        # （否则种子刚下完的那一轮，文件会被自己挡掉）
+        new_incomplete = set()
+        for torrent in torrents:
+            if not _is_finished(torrent):
+                path = self._resolve_download_path(torrent, cfg)
+                if path:
+                    new_incomplete.add(path.as_posix())
+        if self._tr_incomplete != new_incomplete:
+            logger.info(
+                f"[worker] 仍在下载中的种子 {len(new_incomplete)} 个，其中的文件暂不处理"
+            )
+        self._tr_incomplete = new_incomplete
+
+        # 第二遍：处理已完成的任务
+        for torrent in torrents:
+            torrent_hash = str(torrent.get("hashString") or "")
+            if not torrent_hash:
+                continue
+            if not _is_finished(torrent):
+                continue
+            if torrent_hash in done_map:
                 continue
             if int(torrent.get("error") or 0) != 0:
                 continue
@@ -820,6 +876,7 @@ class Worker:
             self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
             self._persist()
             logger.info(f"[worker] 下载完成，准备秒传：{name}（{len(files)} 个文件）")
+
 
     @staticmethod
     def _map_path(raw_path: str, cfg: Dict[str, Any]) -> str:
