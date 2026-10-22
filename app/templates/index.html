@@ -85,19 +85,17 @@
         background:var(--chip);cursor:pointer;color:var(--text)}
   .chip:hover{border-color:#93c5fd;color:var(--primary)}
   .chip .fs{color:var(--muted);margin-left:4px;font-size:11px}
-  .task-row{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto auto auto;gap:8px;
-            align-items:center;padding:8px 0;border-bottom:1px dashed var(--line)}
+  .task-row{display:grid;grid-template-columns:1fr 1.7fr 1.5fr auto auto;gap:8px;
+            align-items:center;padding:10px 0;border-bottom:1px dashed var(--line)}
   .task-row:last-child{border-bottom:none}
   .task-row input[type=text]{padding:7px 9px}
+  .t-field{display:block;min-width:0}
+  .t-label{display:none}
+  .t-flags{display:flex;align-items:center;gap:12px;white-space:nowrap}
   .task-row .chk{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap}
-  .task-head{display:grid;grid-template-columns:1.1fr 1.6fr auto 1.3fr auto auto auto auto auto;gap:8px;
+  .task-head{display:grid;grid-template-columns:1fr 1.7fr 1.5fr auto auto;gap:8px;
              font-size:12px;color:var(--muted);padding-bottom:6px;border-bottom:1px solid var(--line)}
   .row-note{display:none}
-  @media(max-width:780px){
-    .task-head{display:none}
-    .task-row{grid-template-columns:1fr;gap:6px;padding:10px;border:1px solid var(--line);
-              border-radius:10px;margin-bottom:10px}
-  }
 
   /* ---------- 手机端 ---------- */
   @media(max-width:720px){
@@ -114,6 +112,17 @@
     .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
     .tabs button{flex:0 0 auto;white-space:nowrap}
     .panel{padding:14px}
+    /* 监控任务改成带标签的卡片 */
+    .task-row{display:block;padding:12px;border:1px solid var(--line);
+              border-radius:12px;margin-bottom:12px;background:var(--card)}
+    .task-row:last-child{margin-bottom:0}
+    .t-field{display:block;margin-bottom:10px}
+    .t-label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+    .t-field .row-inline{display:flex;gap:8px}
+    .t-field .row-inline input{flex:1;min-width:0}
+    .t-field .row-inline button{flex:0 0 auto;white-space:nowrap}
+    .t-flags{display:flex;flex-wrap:wrap;gap:14px;padding:8px 0;border-top:1px dashed var(--line);margin-top:2px}
+    .task-row .t-del{width:100%;margin-top:10px;color:var(--err);border-color:var(--line)}
     /* 文件列表改成卡片 */
     thead{display:none}
     table,tbody{display:block;width:100%}
@@ -219,8 +228,8 @@
     <div class="divider"></div>
     <h3>监控任务（本地目录 → 115 目录，可加多个）</h3>
     <div id="taskHead" class="task-head">
-      <span>任务名</span><span>本地监控目录</span><span></span>
-      <span>115 目标目录</span><span></span><span>启用</span><span>保留</span><span>CMS</span><span></span>
+      <span>任务名</span><span>本地监控目录</span><span>115 目标目录</span>
+      <span>启用 / 保留 / CMS</span><span></span>
     </div>
     <div id="taskList"></div>
     <div style="margin-top:10px">
@@ -522,16 +531,31 @@ function renderTasks(){
   }
   box.innerHTML = tasks.map((t, i) => `
     <div class="task-row" data-i="${i}">
-      <input type="text" class="t-name" value="${esc(t.name)}" placeholder="任务名，如 电影">
-      <input type="text" class="t-watch" list="mountOptions" value="${esc(t.watch_dir)}" placeholder="/watch/movies">
-      <button type="button" class="t-browse" data-kind="watch" data-i="${i}">浏览</button>
-      <input type="text" class="t-target" value="${esc(t.target_dir || '/')}" placeholder="/电影">
-      <button type="button" class="t-browse" data-kind="115" data-i="${i}">浏览</button>
-      <label class="chk"><input type="checkbox" class="t-enabled" ${t.enabled === false ? '' : 'checked'}>启用</label>
-      <label class="chk" title="勾上表示这个目录秒传后不删本地文件（比如下载目录还要做种）">
-        <input type="checkbox" class="t-keep" ${t.keep_source ? 'checked' : ''}>保留</label>
-      <label class="chk" title="勾上表示这个目录秒传成功后通知 CMS 做增量同步（下载目录一般不用）">
-        <input type="checkbox" class="t-cms" ${t.cms_notify === false ? '' : 'checked'}>CMS</label>
+      <div class="t-field">
+        <span class="t-label">任务名</span>
+        <input type="text" class="t-name" value="${esc(t.name)}" placeholder="任务名，如 电影">
+      </div>
+      <div class="t-field">
+        <span class="t-label">本地监控目录</span>
+        <div class="row-inline">
+          <input type="text" class="t-watch" list="mountOptions" value="${esc(t.watch_dir)}" placeholder="/watch/movies">
+          <button type="button" class="t-browse" data-kind="watch" data-i="${i}">浏览</button>
+        </div>
+      </div>
+      <div class="t-field">
+        <span class="t-label">115 目标目录</span>
+        <div class="row-inline">
+          <input type="text" class="t-target" value="${esc(t.target_dir || '/')}" placeholder="/电影">
+          <button type="button" class="t-browse" data-kind="115" data-i="${i}">浏览</button>
+        </div>
+      </div>
+      <div class="t-flags">
+        <label class="chk"><input type="checkbox" class="t-enabled" ${t.enabled === false ? '' : 'checked'}>启用</label>
+        <label class="chk" title="勾上表示这个目录秒传后不删本地文件（比如下载目录还要做种）">
+          <input type="checkbox" class="t-keep" ${t.keep_source ? 'checked' : ''}>保留</label>
+        <label class="chk" title="勾上表示这个目录秒传成功后通知 CMS 做增量同步（下载目录一般不用）">
+          <input type="checkbox" class="t-cms" ${t.cms_notify === false ? '' : 'checked'}>CMS</label>
+      </div>
       <button type="button" class="t-del" data-i="${i}">删除</button>
     </div>`).join('');
 
