@@ -96,6 +96,12 @@
   .task-head{display:grid;grid-template-columns:1fr 1.7fr 1.5fr auto auto;gap:8px;
              font-size:12px;color:var(--muted);padding-bottom:6px;border-bottom:1px solid var(--line)}
   .row-note{display:none}
+  .pager{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .pager button{padding:6px 12px}
+  .pager button:disabled{opacity:.4;cursor:not-allowed}
+  .pager select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;
+                background:var(--card);color:var(--text);font:inherit}
+  .pager #pageInfo{font-size:12px;color:var(--muted)}
 
   /* ---------- 手机端 ---------- */
   @media(max-width:720px){
@@ -183,9 +189,19 @@
       只记录"处理过"的文件：<code>done</code> 秒传成功；<code>held</code> 被拦截等下次重试。
     </div>
     <table>
-      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th class="col-hide">大小</th><th>状态</th><th class="col-hide">尝试</th><th class="col-hide">上次</th><th class="col-hide">下次</th><th class="col-hide">说明</th></tr></thead>
+      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th class="col-hide">大小</th><th>状态</th><th class="col-hide">尝试</th><th class="col-hide">时间</th><th class="col-hide">下次</th><th class="col-hide">说明</th></tr></thead>
       <tbody id="fileRows"><tr><td colspan="9" class="empty">暂无记录</td></tr></tbody>
     </table>
+    <div class="pager">
+      <button type="button" id="btnPrev">‹ 上一页</button>
+      <span id="pageInfo" class="muted">-</span>
+      <button type="button" id="btnNext">下一页 ›</button>
+      <select id="pageSize" title="每页条数">
+        <option value="30">30 条/页</option>
+        <option value="50">50 条/页</option>
+        <option value="100">100 条/页</option>
+      </select>
+    </div>
     <div id="lastResults" style="margin-top:18px"></div>
     <div style="margin-top:14px;display:flex;gap:8px">
       <button id="btnReset">清空处理记录</button>
@@ -462,24 +478,73 @@ async function refresh(){
       $('eventPill').className = 'pill';
     }
 
-    const rows = (s.files||[]).map(f => {
-      const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
-      return `<tr>
-              <td class="c-meta c-task"><span class="task-id" title="${f.task||''}">${f.task_name || f.task || ''}</span></td>
-              <td class="c-file">${f.key}${f.note ? `<div class="row-note">${f.note}</div>` : ''}</td>
-              <td class="c-meta"><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
-              <td class="col-hide">${f.size}</td>
-              <td class="c-status">${badge}</td>
-              <td class="col-hide">${f.tries}</td>
-              <td class="col-hide">${f.last_try||''}</td>
-              <td class="col-hide">${f.next_try||''}</td>
-              <td class="col-hide">${f.note||''}</td></tr>`;
-    }).join('');
-    $('fileRows').innerHTML = rows || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
+    refreshFiles();
+
     $('lastResults').innerHTML = '<div class="muted" style="margin-bottom:6px">最近一轮结果</div>' + fmtList(s.last_results);
     if(s.last_error) $('setErr').textContent = '最近错误：' + s.last_error;
   }catch(e){ console.warn(e); }
 }
+
+// ---------------- 文件记录分页 ----------------
+let filePage = 1;
+let fileSize = 30;
+let fileSig = '';
+let fileBusy = false;
+
+function pagerRender(total, page, pages){
+  $('pageInfo').textContent = total
+    ? `第 ${page} / ${pages} 页 · 共 ${total} 条`
+    : '暂无记录';
+  $('btnPrev').disabled = page <= 1;
+  $('btnNext').disabled = page >= pages;
+}
+
+async function loadFiles(page){
+  if(fileBusy) return;
+  if(page) filePage = page;
+  fileBusy = true;
+  try{
+    const r = await api(`/api/files?page=${filePage}&size=${fileSize}`);
+    filePage = r.page;
+    pagerRender(r.total, r.page, r.pages);
+    const sig = JSON.stringify(r.rows);
+    if(sig === fileSig) return;      // 没变化就不重排，避免闪烁
+    fileSig = sig;
+    const html = (r.rows || []).map(f => {
+      const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
+      const stamp = f.done_at || f.last_try || '';
+      const noteText = [f.note, stamp].filter(Boolean).join(' · ');
+      return `<tr>
+              <td class="c-meta c-task"><span class="task-id" title="${f.task||''}">${f.task_name || f.task || ''}</span></td>
+              <td class="c-file">${f.key}${noteText ? `<div class="row-note">${noteText}</div>` : ''}</td>
+              <td class="c-meta"><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
+              <td class="col-hide">${f.size}</td>
+              <td class="c-status">${badge}</td>
+              <td class="col-hide">${f.tries}</td>
+              <td class="col-hide">${stamp}</td>
+              <td class="col-hide">${f.next_try||''}</td>
+              <td class="col-hide">${f.note||''}</td></tr>`;
+    }).join('');
+    $('fileRows').innerHTML = html || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
+  }catch(e){
+    console.warn(e);
+  }finally{
+    fileBusy = false;
+  }
+}
+
+function refreshFiles(){
+  const panel = $('panelFiles');
+  if(panel && panel.style.display !== 'none') loadFiles();
+}
+
+$('btnPrev').onclick = () => { if(filePage > 1) { fileSig=''; loadFiles(filePage - 1); } };
+$('btnNext').onclick = () => { fileSig=''; loadFiles(filePage + 1); };
+$('pageSize').onchange = () => {
+  fileSize = Number($('pageSize').value) || 30;
+  fileSig = '';
+  loadFiles(1);
+};
 
 let settingsLoaded = false;
 
@@ -692,6 +757,8 @@ $('btnRun').onclick = async () => {
 $('btnReset').onclick = async () => {
   if(!confirm('清空所有处理记录？已秒传成功的文件不会重传，但拦截记录会丢。')) return;
   await api('/api/reset', {method:'POST'});
+  filePage = 1; fileSig = '';
+  loadFiles(1);
   refresh();
 };
 
@@ -700,6 +767,7 @@ function showTab(name){
     $(`tab${t}`).classList.toggle('on', t === name);
     $(`panel${t}`).style.display = (t === name) ? '' : 'none';
   });
+  if(name === 'Files') loadFiles();
   if(name === 'Set') loadSettings();
   if(name === 'Log') loadLogs();
 }

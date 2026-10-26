@@ -252,9 +252,18 @@ def api_status() -> Dict[str, Any]:
         else "",
         "last_error": worker.last_error,
         "last_results": worker.last_results,
-        "files": worker.files_view(),
+        "file_total": len(worker.state.get("files") or {}),
         "last_cleanup_count": worker.state.get("last_cleanup_count") or 0,
     }
+
+
+@app.get("/api/files")
+def api_files(
+    page: int = Query(1, ge=1),
+    size: int = Query(30, ge=5, le=200),
+) -> Dict[str, Any]:
+    """文件处理记录（分页，新的在前）"""
+    return worker.files_page(page=page, size=size)
 
 
 @app.get("/api/settings")

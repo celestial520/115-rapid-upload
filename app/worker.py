@@ -426,6 +426,7 @@ class Worker:
         try:
             if self.client.find_file(target_cid, path.name):
                 record["status"] = "done"
+                record["done_at"] = time.time()
                 record["note"] = "网盘已有同名文件"
                 deleted = self._finish_local(path, cfg, task)
                 return {
@@ -460,6 +461,7 @@ class Worker:
 
         if ok:
             record["status"] = "done"
+            record["done_at"] = time.time()
             record["note"] = "秒传成功"
             deleted = self._finish_local(path, cfg, task)
             return {
@@ -480,6 +482,7 @@ class Worker:
                 )
                 if uploaded:
                     record["status"] = "done"
+                    record["done_at"] = time.time()
                     record["note"] = upload_detail
                     deleted = self._finish_local(path, cfg, task)
                     return {
@@ -1027,6 +1030,7 @@ class Worker:
         for key, value in (self.state.get("files") or {}).items():
             value = value or {}
             last_try = float(value.get("last_try") or 0)
+            done_at = float(value.get("done_at") or 0)
             next_text = ""
             if value.get("status") == "held":
                 next_text = "每天 " + str(cfg.get("daily_scan_time") or "09:00")
@@ -1044,8 +1048,33 @@ class Worker:
                     "last_try": time.strftime("%m-%d %H:%M", time.localtime(last_try))
                     if last_try
                     else "",
+                    "done_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(done_at))
+                    if done_at
+                    else "",
+                    "sort_ts": done_at or last_try
+                    or float(value.get("first_seen") or 0),
                     "next_try": next_text,
                 }
             )
-        rows.sort(key=lambda r: r.get("last_try") or "", reverse=True)
+        rows.sort(key=lambda r: r.get("sort_ts") or 0, reverse=True)
+        for row in rows:
+            row.pop("sort_ts", None)
         return rows
+
+    def files_page(self, page: int = 1, size: int = 30) -> Dict[str, Any]:
+        """
+        文件记录分页（新的在前）
+        """
+        rows = self.files_view()
+        total = len(rows)
+        size = max(1, min(200, int(size or 30)))
+        pages = max(1, (total + size - 1) // size)
+        page = max(1, min(pages, int(page or 1)))
+        start = (page - 1) * size
+        return {
+            "rows": rows[start : start + size],
+            "total": total,
+            "page": page,
+            "size": size,
+            "pages": pages,
+        }
