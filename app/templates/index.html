@@ -50,6 +50,25 @@
   th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
   th{color:var(--muted);font-weight:500;font-size:12px}
   tr:last-child td{border-bottom:none}
+  /* 文件记录表：固定列宽，防止长路径把别的列挤成竖排 / 把表格顶出面板 */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tbl-files{table-layout:fixed}
+  .tbl-files th,.tbl-files td{word-break:break-word;overflow-wrap:anywhere}
+  .tbl-files th{white-space:nowrap}
+  td.c-task,td.c-src,td.c-size,td.c-status,td.c-tries,td.c-time{white-space:nowrap}
+  .tbl-files .task-id{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.c-file{line-height:1.5}
+  td.c-file .row-note{display:none;margin-top:3px;line-height:1.4;font-size:12px;color:var(--muted)}
+  td.c-time{font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted);line-height:1.35}
+  td.c-time .t-date,td.c-time .t-time{display:block}
+  td.c-time .t-time{color:var(--text);font-weight:600}
+  td.c-note{font-size:12px;line-height:1.45}
+  td.c-note .n-sub{color:var(--muted);margin-top:2px}
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;white-space:nowrap}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+  .badge.done::before{background:var(--ok)}
+  .badge.held::before{background:var(--warn)}
+  .chip.flat{cursor:default;white-space:nowrap;font-size:12px;padding:2px 9px;line-height:1.5}
   .empty{color:var(--muted);text-align:center;padding:26px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
   label.f{display:block}
@@ -100,8 +119,25 @@
   .pager button{padding:6px 12px}
   .pager button:disabled{opacity:.4;cursor:not-allowed}
   .pager select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;
-                background:var(--card);color:var(--text);font:inherit}
+                background:var(--card);color:var(--text);font:inherit;
+                width:auto;flex:0 0 auto;margin-left:auto}
   .pager #pageInfo{font-size:12px;color:var(--muted)}
+
+  /* ---------- 窄屏：文件记录表改成卡片（≤900px，平板也适用） ---------- */
+  @media(max-width:900px){
+    .tbl-files thead{display:none}
+    .tbl-files,.tbl-files tbody{display:block;width:100%}
+    .tbl-files tbody tr{display:flex;flex-wrap:wrap;gap:4px 10px;border:1px solid var(--line);
+                        border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--card)}
+    .tbl-files tbody td{border:none;padding:0;display:block;width:auto;max-width:none}
+    .tbl-files td.c-file{order:1;flex:0 0 100%;font-size:13px;line-height:1.45}
+    .tbl-files td.c-task{order:2;flex:0 0 auto;font-size:12px;color:var(--muted)}
+    .tbl-files td.c-src{order:2;flex:0 0 auto}
+    .tbl-files td.c-status{order:2;flex:0 0 auto}
+    .tbl-files td.hide-sm,.tbl-files td.hide-md{display:none}
+    .tbl-files td.c-file .row-note{display:block}
+    .tbl-files .task-id{max-width:160px}
+  }
 
   /* ---------- 手机端 ---------- */
   @media(max-width:720px){
@@ -129,19 +165,13 @@
     .t-field .row-inline button{flex:0 0 auto;white-space:nowrap}
     .t-flags{display:flex;flex-wrap:wrap;gap:14px;padding:8px 0;border-top:1px dashed var(--line);margin-top:2px}
     .task-row .t-del{width:100%;margin-top:10px;color:var(--err);border-color:var(--line)}
-    /* 文件列表改成卡片 */
+    /* 最近一轮结果表（窄屏也转卡片） */
     thead{display:none}
     table,tbody{display:block;width:100%}
     tbody tr{display:flex;flex-wrap:wrap;gap:4px 10px;border:1px solid var(--line);
              border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--card)}
     tbody td{border:none;padding:0;display:block}
-    td.c-file{order:1;flex:0 0 100%;font-size:13px;line-height:1.45;word-break:break-word}
-    td.c-meta{order:2;flex:0 0 auto;font-size:12px;color:var(--muted);white-space:nowrap}
-    td.c-status{order:2;flex:0 0 auto;font-size:12px;white-space:nowrap}
-    td.col-hide{display:none!important}
-    .row-note{display:block;margin-top:3px;line-height:1.4;font-size:12px;color:var(--muted)}
     .chip{white-space:nowrap}
-    .task-id{max-width:120px;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
     table{font-size:12px}
     th,td{padding:8px 6px}
     .row-inline{flex-wrap:wrap}
@@ -188,10 +218,21 @@
     <div class="muted" style="margin-bottom:10px">
       只记录"处理过"的文件：<code>done</code> 秒传成功；<code>held</code> 被拦截等下次重试。
     </div>
-    <table>
-      <thead><tr><th>任务</th><th>文件</th><th>来源</th><th class="col-hide">大小</th><th>状态</th><th class="col-hide">尝试</th><th class="col-hide">时间</th><th class="col-hide">下次</th><th class="col-hide">说明</th></tr></thead>
-      <tbody id="fileRows"><tr><td colspan="9" class="empty">暂无记录</td></tr></tbody>
+    <div class="table-wrap">
+    <table class="tbl-files">
+      <colgroup>
+        <col style="width:88px"><col>
+        <col style="width:92px"><col style="width:66px">
+        <col style="width:78px"><col style="width:48px">
+        <col style="width:86px"><col style="width:148px">
+      </colgroup>
+      <thead><tr>
+        <th>任务</th><th>文件</th><th>来源</th><th class="hide-sm">大小</th><th>状态</th>
+        <th class="hide-md">尝试</th><th class="hide-sm">时间</th><th class="hide-sm">说明</th>
+      </tr></thead>
+      <tbody id="fileRows"><tr><td colspan="8" class="empty">暂无记录</td></tr></tbody>
     </table>
+    </div>
     <div class="pager">
       <button type="button" id="btnPrev">‹ 上一页</button>
       <span id="pageInfo" class="muted">-</span>
@@ -426,7 +467,7 @@ function fmtList(items){
   const rows = items.map(r =>
     `<tr><td>${r.file||''}</td><td>${r.size||''}</td><td>${r.status||''}</td><td>${r.note||''}</td></tr>`
   ).join('');
-  return `<table><thead><tr><th>文件</th><th>大小</th><th>结果</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<div class="table-wrap"><table><thead><tr><th>文件</th><th>大小</th><th>结果</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 async function refresh(){
@@ -511,21 +552,25 @@ async function loadFiles(page){
     if(sig === fileSig) return;      // 没变化就不重排，避免闪烁
     fileSig = sig;
     const html = (r.rows || []).map(f => {
-      const badge = f.status === 'done' ? '🟢 done' : (f.status === 'held' ? '🟡 held' : f.status || '');
       const stamp = f.done_at || f.last_try || '';
       const noteText = [f.note, stamp].filter(Boolean).join(' · ');
+      const bits = stamp.split(' ');
+      const timeHtml = bits[0]
+        ? `<span class="t-date">${esc(bits[0])}</span><span class="t-time">${esc(bits[1] || '')}</span>`
+        : '<span class="t-date">-</span>';
+      const st = String(f.status || '');
+      const stCls = st === 'done' ? 'done' : (st === 'held' ? 'held' : '');
       return `<tr>
-              <td class="c-meta c-task"><span class="task-id" title="${f.task||''}">${f.task_name || f.task || ''}</span></td>
-              <td class="c-file">${f.key}${noteText ? `<div class="row-note">${noteText}</div>` : ''}</td>
-              <td class="c-meta"><span class="chip" style="cursor:default">${srcLabel(f.source)}</span></td>
-              <td class="col-hide">${f.size}</td>
-              <td class="c-status">${badge}</td>
-              <td class="col-hide">${f.tries}</td>
-              <td class="col-hide">${stamp}</td>
-              <td class="col-hide">${f.next_try||''}</td>
-              <td class="col-hide">${f.note||''}</td></tr>`;
+              <td class="c-task"><span class="task-id" title="${esc(f.task_name || f.task || '')}">${esc(f.task_name || f.task || '')}</span></td>
+              <td class="c-file"><span class="fname">${esc(f.key)}</span>${noteText ? `<div class="row-note">${esc(noteText)}</div>` : ''}</td>
+              <td class="c-src"><span class="chip flat">${esc(srcLabel(f.source))}</span></td>
+              <td class="c-size hide-sm">${esc(f.size)}</td>
+              <td class="c-status"><span class="badge ${stCls}">${esc(st || '-')}</span></td>
+              <td class="c-tries hide-md">${f.tries || 0}</td>
+              <td class="c-time hide-sm">${timeHtml}</td>
+              <td class="c-note hide-sm"><div class="n-main">${esc(f.note)}</div>${f.next_try ? `<div class="n-sub">下次 ${esc(f.next_try)}</div>` : ''}</td></tr>`;
     }).join('');
-    $('fileRows').innerHTML = html || '<tr><td colspan="9" class="empty">暂无记录</td></tr>';
+    $('fileRows').innerHTML = html || '<tr><td colspan="8" class="empty">暂无记录</td></tr>';
   }catch(e){
     console.warn(e);
   }finally{
