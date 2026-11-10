@@ -72,16 +72,12 @@ class Worker:
         # 还在下载中的种子路径：这些路径下的文件先不处理，等整个种子下完
         self._tr_incomplete: set = set()
         self._tr_incomplete_at: float = 0.0
-        # 已经提示过"按同名目录兜底匹配"的种子，避免每 30 秒刷一次日志
-        self._tr_fallback_logged: set = set()
         self.tr_state: Dict[str, Any] = {
             "connected": False,
             "error": "",
             "last_poll": 0,
             "completed": 0,
             "missing": {},
-            "last_raw": "",
-            "fallback_hint": "",
         }
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -811,11 +807,6 @@ class Worker:
         cfg = get_settings()
         if not cfg.get("tr_enabled"):
             return
-        # 路径映射配置改动后，旧的"兜底匹配"提示就不作数了
-        map_sig = str(cfg.get("tr_path_map") or [])
-        if self.tr_state.get("_map_sig") != map_sig:
-            self.tr_state["_map_sig"] = map_sig
-            self.tr_state["fallback_hint"] = ""
         data = self._tr_rpc(
             "torrent-get",
             {
@@ -835,8 +826,6 @@ class Worker:
         if not data:
             return
         torrents = ((data.get("arguments") or {}).get("torrents")) or []
-        if torrents:
-            self.tr_state["last_raw"] = self._raw_torrent_path(torrents[0])
         done_map = self.state.setdefault("tr_done", {})
         missing = self.tr_state.setdefault("missing", {})
 
@@ -852,8 +841,8 @@ class Worker:
         new_incomplete = set()
         for torrent in torrents:
             if not _is_finished(torrent):
-                path, _how, _raw = self._locate_torrent(torrent, cfg)
-                if path and path.as_posix():
+                path = self._resolve_download_path(torrent, cfg)
+                if path:
                     new_incomplete.add(path.as_posix())
         if self._tr_incomplete != new_incomplete:
             logger.info(
@@ -873,55 +862,20 @@ class Worker:
                 continue
             if int(torrent.get("error") or 0) != 0:
                 continue
-            path, how, raw = self._locate_torrent(torrent, cfg)
+            path = self._resolve_download_path(torrent, cfg)
             name = str(torrent.get("name") or "")
-            if how == "missing":
+            if not path or not path.exists():
                 if torrent_hash not in missing:
-                    maps = cfg.get("tr_path_map") or []
-                    maps_desc = (
-                        "、".join(
-                            f"{m.get('from')} → {m.get('to')}"
-                            for m in maps
-                            if isinstance(m, dict) and m.get("from") and m.get("to")
-                        )
-                        or "未配置"
-                    )
-                    watch_dirs = [
-                        str(t.get("watch_dir"))
-                        for t in self._enabled_tasks(cfg)
-                        if t.get("watch_dir")
-                    ]
-                    suggest = watch_dirs[0] if watch_dirs else "/9kg"
-                    src = str(torrent.get("downloadDir") or "").rstrip("/")
-                    if not src and "/" in raw:
-                        src = raw.rsplit("/", 1)[0]
-                    hint = (
-                        f"下载器报 {raw or '空路径'}；当前路径映射：{maps_desc}。"
-                        f"到「设置 → 下载器监控 → 路径映射」添加 {src} → {suggest}"
-                    )
                     missing[torrent_hash] = {
                         "name": name,
                         "path": str(path or ""),
-                        "raw": raw,
-                        "reason": hint,
+                        "reason": "本地找不到，检查下载器的路径映射",
                         "at": time.strftime("%m-%d %H:%M"),
                     }
                     logger.info(
-                        f"[worker] 下载已完成但本地找不到：{name} -> {path}（{hint}）"
+                        f"[worker] 下载已完成但本地找不到：{name} -> {path}（检查路径映射）"
                     )
                 continue
-            if how == "fallback":
-                src = str(torrent.get("downloadDir") or "").rstrip("/")
-                self.tr_state["fallback_hint"] = (
-                    f"下载器报 {raw}，已按同名目录在 {path.as_posix()} 找到并继续处理；"
-                    f"建议补一条路径映射 {src} → {path.parent.as_posix()}"
-                )
-                if torrent_hash not in self._tr_fallback_logged:
-                    self._tr_fallback_logged.add(torrent_hash)
-                    logger.info(
-                        f"[worker] 路径映射没命中，按同名目录找到：{raw} -> {path.as_posix()}"
-                        "（建议补一条路径映射，长期更稳）"
-                    )
             files = self._files_from_torrent(path, cfg)
             if not files:
                 if torrent_hash not in missing:
@@ -960,71 +914,6 @@ class Worker:
             self._persist()
             logger.info(f"[worker] 下载完成，准备秒传：{name}（{len(files)} 个文件）")
 
-
-    @staticmethod
-    def _raw_torrent_path(torrent: Dict[str, Any]) -> str:
-        """下载器报出来的原始路径（downloadDir + name）"""
-        name = str(torrent.get("name") or "").strip().strip("/")
-        base = str(torrent.get("downloadDir") or "").strip().rstrip("/")
-        if not name:
-            return ""
-        return f"{base}/{name}" if base else name
-
-    def _fallback_paths(self, torrent: Dict[str, Any], cfg: Dict[str, Any]) -> List[Path]:
-        """
-        没配路径映射时，下载器报的 /media/下载/剧名 在容器里根本不存在。
-        按"种子名"到各个监控目录里找同名文件/目录，覆盖最常见的：
-          下载器 /media/下载/剧名   <->   容器 /9kg/剧名
-        只是兜底，仍会在日志里提示补一条正式的路径映射。
-        """
-        name = str(torrent.get("name") or "").strip().strip("/")
-        if not name or ".." in Path(name).parts:
-            return []
-        base = str(torrent.get("downloadDir") or "").strip()
-        tails = [name]
-        parts = [x for x in base.replace("\\", "/").split("/") if x]
-        if parts:
-            tails.append("/".join(parts[-1:] + [name]))
-            if len(parts) >= 2:
-                tails.append("/".join(parts[-2:] + [name]))
-
-        out: List[Path] = []
-        for task in self._enabled_tasks(cfg):
-            watch_raw = str(task.get("watch_dir") or "").strip()
-            if not watch_raw:
-                continue
-            watch = Path(watch_raw).expanduser()
-            for tail in tails:
-                if ".." in Path(tail).parts:
-                    continue
-                candidate = watch / tail
-                if candidate not in out:
-                    out.append(candidate)
-        return out
-
-    def _locate_torrent(
-        self, torrent: Dict[str, Any], cfg: Dict[str, Any]
-    ) -> tuple:
-        """
-        返回 (本地路径, 命中方式, 下载器原路径)
-        命中方式：ok = 路径映射正确 / fallback = 按同名目录兜底 / missing = 都找不到
-        """
-        raw = self._raw_torrent_path(torrent)
-        if not raw:
-            return Path(""), "missing", raw
-        mapped = Path(self._map_path(raw, cfg))
-        try:
-            if mapped.exists():
-                return mapped, "ok", raw
-        except OSError:
-            pass
-        for candidate in self._fallback_paths(torrent, cfg):
-            try:
-                if candidate.exists():
-                    return candidate, "fallback", raw
-            except OSError:
-                continue
-        return mapped, "missing", raw
 
     @staticmethod
     def _map_path(raw_path: str, cfg: Dict[str, Any]) -> str:

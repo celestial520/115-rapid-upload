@@ -236,8 +236,6 @@ def api_status() -> Dict[str, Any]:
             for v in list((worker.tr_state.get("missing") or {}).values())[:10]
             if isinstance(v, dict)
         ],
-        "tr_last_raw": worker.tr_state.get("last_raw") or "",
-        "tr_fallback_hint": worker.tr_state.get("fallback_hint") or "",
         "tr_last_poll": time.strftime(
             "%m-%d %H:%M:%S", time.localtime(float(worker.tr_state.get("last_poll") or 0))
         )

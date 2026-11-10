@@ -305,9 +305,7 @@
       <label class="f"><span>查询间隔（秒）</span><input type="number" id="tr_poll_sec">
         <span class="muted">只是问一下下载器状态，不碰硬盘，30 秒足够</span></label>
     </div>
-    <div class="muted" style="margin:12px 0 6px">路径映射：下载器里的路径 → 本容器里能看到的路径
-      <div id="mapHint" class="muted" style="margin-top:4px"></div>
-    </div>
+    <div class="muted" style="margin:12px 0 6px">路径映射：下载器里的路径 → 本容器里能看到的路径</div>
     <div id="mapHead" class="task-head" style="grid-template-columns:1.6fr 1.6fr auto">
       <span>下载器内路径</span><span>本容器路径</span><span></span>
     </div>
@@ -542,19 +540,12 @@ async function refresh(){
       $('cooldownTip').textContent = items.join(' · ');
     }
 
-    if($('mapHint')){
-      $('mapHint').textContent = s.tr_last_raw
-        ? '下载器最近报的路径：' + s.tr_last_raw + '（把它的目录前缀映射到本容器里对应的挂载目录）'
-        : '';
-    }
-
     if($('trUnmatched')){
       const un = s.tr_unmatched || [];
-      const hint = s.tr_fallback_hint ? '⚠ ' + esc(s.tr_fallback_hint) + '<br>' : '';
-      $('trUnmatched').innerHTML = hint + (un.length
+      $('trUnmatched').innerHTML = un.length
         ? '⚠ 有已完成任务没匹配到监控目录：<br>' + un.map(u =>
             `· ${esc(u.name || '')} → <code>${esc(u.path || '')}</code><br><span class="muted">　${esc(u.reason || '')}</span>`).join('<br>')
-        : '');
+        : '';
     }
 
     const daily = s.daily_scan_enabled ? `每天 ${s.daily_scan_time} 全量扫描` : '每日扫描已关';
