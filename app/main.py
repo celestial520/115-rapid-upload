@@ -305,19 +305,49 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @app.post("/api/muvyo/test")
 def api_muvyo_test() -> Dict[str, Any]:
-    """试触发一次 Muvyo 的目录监控整理，确认地址 / API Key / 规则名对不对"""
-    from .notify import trigger_muvyo
+    """
+    试触发一次 Muvyo 的目录监控整理，确认地址 / API Key / 规则名对不对。
+    优先测「勾了 MV」的任务目录——没勾的目录 Muvyo 本来就没规则，测了也是白报错
+    """
+    from .notify import trigger_muvyo_report
 
     cfg = get_settings()
-    dirs = [
+    tasks = [t for t in (cfg.get("tasks") or []) if t.get("enabled", True)]
+    picked = [
         str(t.get("target_dir") or "/")
-        for t in (cfg.get("tasks") or [])
-        if t.get("enabled", True)
-    ] or ["/"]
-    error = trigger_muvyo(dirs, require_enabled=False)
-    if error:
+        for t in tasks
+        if t.get("muvyo_notify", True)
+    ]
+    if not picked:
+        picked = [str(t.get("target_dir") or "/") for t in tasks]
+    if not picked:
+        picked = ["/"]
+
+    report = trigger_muvyo_report(picked, require_enabled=False)
+    error = report.get("error")
+    sent = report.get("sent") or []
+    missing = report.get("missing") or []
+    failed = report.get("failed") or []
+    if error and not sent:
         raise HTTPException(status_code=400, detail=error)
-    return {"ok": True}
+
+    if sent:
+        message = "已触发：" + "、".join(sent)
+        if missing:
+            message += (
+                "；" + "、".join(missing) + " 在 Muvyo 里没有监控规则，已跳过"
+                "（真实秒传也不会触发它）"
+            )
+        for item in failed[:2]:
+            message += "；" + item["error"]
+    else:
+        message = "已触发"
+    return {
+        "ok": True,
+        "message": message,
+        "sent": sent,
+        "missing": missing,
+    }
 
 
 @app.post("/api/run")

@@ -96,6 +96,25 @@ def _merge_dirs(item: Dict[str, Any], dirs: Optional[List[str]]) -> None:
     item["dirs"] = merged[:MAX_PENDING_DIRS]
 
 
+# 这些错误重试也没用（配置 / 权限问题），记一次就够了，别每 5 分钟撞一次
+_PERMANENT_HINTS = (
+    "未找到",
+    "没有监控",
+    "不存在",
+    "配置不完整",
+    "not found",
+    "invalid",
+    "无权限",
+    "HTTP 401",
+    "HTTP 403",
+)
+
+
+def _looks_permanent(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(hint.lower() in text for hint in _PERMANENT_HINTS)
+
+
 def _send_channel(channel: str, dirs: List[str]) -> Optional[str]:
     cfg = get_settings()
     if channel == "cms":
@@ -140,10 +159,15 @@ def _gate_run(
     with _gate_lock:
         item = _gate_load()[channel]
         if err:
-            # 没发成功就把目录还回去，下个间隔再补，别丢
-            _merge_dirs(item, batch)
-            item["pending"] = True
+            # 网络抖动之类的失败：把目录还回去，下个间隔再补，别丢
+            # 配置问题（目录没规则、Key 不对）：重试也没用，不排重试，只记一次错误
+            retry = not _looks_permanent(err)
+            if retry:
+                _merge_dirs(item, batch)
+            item["pending"] = retry
             item["last_error"] = err
+            if not retry:
+                logger.warning(f"[{label}] 属于配置问题，不再自动重试：{err}")
         else:
             item["last_error"] = ""
         _gate_save()
@@ -329,26 +353,42 @@ def trigger_cms() -> Optional[str]:
         return message
 
 
-def trigger_muvyo(
+def trigger_muvyo_report(
     target_dirs: Optional[List[str]] = None, require_enabled: bool = True
-) -> Optional[str]:
+) -> Dict[str, Any]:
     """
     通知 Muvyo 走一遍「目录监控整理」：转存/上传进网盘的目录，让它扫到并生成 STRM。
     接口：POST /api/v1/monitor/trigger-organize
       - name       监控规则名（推荐，同目录挂了多个网盘账号时只有它能分清）
       - source_dir 监控源目录（该目录只对应一条规则时可用）
-    返回 None 表示成功，否则返回错误说明
+
+    逐个目录触发，一个目录报错不影响其它目录。返回明细：
+      ok      是否全部成功
+      sent    成功的标签（规则名 / 目录）
+      missing Muvyo 里找不到监控规则的目录（配置问题，重试也不会好）
+      failed  其它失败 [{"label":..., "error":...}]
+      error   汇总给用户看的一句话（None = 没问题）
     """
+    report: Dict[str, Any] = {
+        "ok": True,
+        "sent": [],
+        "missing": [],
+        "failed": [],
+        "error": None,
+    }
     cfg = get_settings()
     if require_enabled and not cfg.get("muvyo_enabled"):
-        return "Muvyo 通知未启用"
+        report.update(ok=False, error="Muvyo 通知未启用")
+        return report
     base = str(cfg.get("muvyo_url") or "").strip().rstrip("/")
     apikey = str(cfg.get("muvyo_apikey") or "").strip()
     rule = str(cfg.get("muvyo_rule") or "").strip()
     if not base:
-        return "Muvyo 配置不完整（管理面板地址必填）"
+        report.update(ok=False, error="Muvyo 配置不完整（管理面板地址必填）")
+        return report
     if not apikey:
-        return "Muvyo 配置不完整（API Key 必填）"
+        report.update(ok=False, error="Muvyo 配置不完整（API Key 必填）")
+        return report
 
     url = f"{base}/api/v1/monitor/trigger-organize"
     headers = {"X-API-Key": apikey}
@@ -366,27 +406,56 @@ def trigger_muvyo(
     for params in calls:
         label = params.get("name") or params.get("source_dir") or "-"
         logger.info(f"[Muvyo] 触发目录监控整理：{label}")
+        message = ""
         try:
             resp = requests.post(url, params=params, headers=headers, timeout=20)
             body = (resp.text or "").strip()
             if resp.status_code >= 400:
                 message = f"Muvyo 返回 HTTP {resp.status_code}：{body[:200]}"
-                logger.warning(f"[Muvyo] 通知失败：{message}")
-                return message
-            try:
-                data = resp.json()
+            else:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = None
                 if isinstance(data, dict) and data.get("success") is False:
                     message = f"Muvyo 返回失败：{data.get('message') or data}"
-                    logger.warning(f"[Muvyo] 通知失败：{message}")
-                    return message
-                logger.info(f"[Muvyo] 通知成功：{str(data)[:150]}")
-            except Exception:
-                logger.info(f"[Muvyo] 通知成功：{body[:150]}")
+                else:
+                    logger.info(f"[Muvyo] 通知成功：{str(data or body)[:150]}")
         except Exception as err:
             message = f"Muvyo 通知异常：{err}"
-            logger.warning(f"[Muvyo] {message}")
-            return message
-    return None
+
+        if not message:
+            report["sent"].append(label)
+            continue
+
+        logger.warning(f"[Muvyo] 通知失败：{message}")
+        # 「未找到监控目录为 X 的规则」是配置问题：这条目录在 Muvyo 里没建规则
+        if "source_dir" in params and "未找到" in message:
+            report["missing"].append(params["source_dir"])
+        else:
+            report["failed"].append({"label": label, "error": message})
+
+    parts: List[str] = []
+    if report["missing"]:
+        shown = "、".join(report["missing"][:3])
+        more = " 等" if len(report["missing"]) > 3 else ""
+        parts.append(f"Muvyo 里没有监控「{shown}」{more}的规则")
+    for item in report["failed"][:3]:
+        parts.append(item["error"])
+    if parts:
+        report["ok"] = False
+        report["error"] = "；".join(parts)
+        # 全部目录都不在 Muvyo 的监控规则里时，补一句怎么办
+        if report["missing"] and not report["sent"] and not report["failed"]:
+            report["error"] += "（在 Muvyo 加一条监控这个目录的规则，或在设置里填「监控规则名」）"
+    return report
+
+
+def trigger_muvyo(
+    target_dirs: Optional[List[str]] = None, require_enabled: bool = True
+) -> Optional[str]:
+    """返回 None 表示成功，否则返回错误说明（给"测试触发"用，不做节流）"""
+    return trigger_muvyo_report(target_dirs, require_enabled).get("error")
 
 
 def _build_text(results: List[Dict[str, Any]]) -> tuple:

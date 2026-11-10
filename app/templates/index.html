@@ -828,8 +828,8 @@ $('btnMuvyoTest').onclick = async () => {
   $('muvyoTip').textContent = '触发中…';
   try{
     await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
-    await api('/api/muvyo/test', {method:'POST'});
-    $('muvyoTip').textContent = '已触发，去 Muvyo 的整理记录里看一下';
+    const r = await api('/api/muvyo/test', {method:'POST'});
+    $('muvyoTip').textContent = (r && r.message) || '已触发，去 Muvyo 的整理记录里看一下';
   }catch(e){
     $('muvyoTip').textContent = '失败：' + e.message;
   }
