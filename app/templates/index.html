@@ -154,6 +154,8 @@
     .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
     .tabs button{flex:0 0 auto;white-space:nowrap}
     .panel{padding:14px}
+    /* 卡片模式下表头没意义（每个字段都有自己的标签），还会把列名挤成两行 */
+    #taskHead,#mapHead{display:none}
     /* 监控任务改成带标签的卡片 */
     .task-row{display:block;padding:12px;border:1px solid var(--line);
               border-radius:12px;margin-bottom:12px;background:var(--card)}
@@ -286,7 +288,7 @@
     <h3>监控任务（本地目录 → 115 目录，可加多个）</h3>
     <div id="taskHead" class="task-head">
       <span>任务名</span><span>本地监控目录</span><span>115 目标目录</span>
-      <span>启用 / 保留 / CMS</span><span></span>
+      <span>启用 / 保留 / CMS / MV</span><span></span>
     </div>
     <div id="taskList"></div>
     <div style="margin-top:10px">
@@ -304,7 +306,7 @@
         <span class="muted">只是问一下下载器状态，不碰硬盘，30 秒足够</span></label>
     </div>
     <div class="muted" style="margin:12px 0 6px">路径映射：下载器里的路径 → 本容器里能看到的路径</div>
-    <div class="task-head" style="grid-template-columns:1.6fr 1.6fr auto">
+    <div id="mapHead" class="task-head" style="grid-template-columns:1.6fr 1.6fr auto">
       <span>下载器内路径</span><span>本容器路径</span><span></span>
     </div>
     <div id="mapList"></div>
@@ -321,7 +323,11 @@
       <div class="check"><input type="checkbox" id="cleanup_enabled"><label for="cleanup_enabled">每天清理空文件夹</label></div>
       <label class="f"><span>每天几点清理空文件夹</span><input type="time" id="cleanup_time"></label>
       <div class="check"><input type="checkbox" id="notify_on_hold"><label for="notify_on_hold">被拦截时也发通知</label></div>
+      <label class="f" style="grid-column:1/-1"><span>通知合并间隔（分钟）</span>
+        <input type="number" id="notify_cooldown_min" min="0" max="1440" step="1" placeholder="5" style="max-width:150px">
+        <span class="muted" style="margin-top:6px">CMS / Muvyo 两次触发至少隔这么久。间隔里来的触发不会丢，会合并、到点补发一次（连续触发会让它们漏整理）。填 0 关闭</span></label>
     </div>
+    <div id="cooldownTip" class="muted" style="margin-top:8px"></div>
 
     <div class="divider"></div>
     <h3>企业微信通知</h3>
@@ -351,6 +357,25 @@
           <option value="auto_organize">增量同步 + 自动整理</option>
         </select>
       </label>
+    </div>
+
+    <div class="divider"></div>
+    <h3>Muvyo 通知（触发目录监控整理 / 生成 STRM）</h3>
+    <div class="grid">
+      <div class="check"><input type="checkbox" id="muvyo_enabled"><label for="muvyo_enabled">启用 Muvyo 通知</label></div>
+      <label class="f"><span>Muvyo 地址（管理面板端口，默认 7811）</span>
+        <input type="text" id="muvyo_url" placeholder="http://192.168.1.10:7811">
+        <span class="muted">用管理面板端口，不要填独立媒体库端口</span></label>
+      <label class="f"><span>API Key</span>
+        <input type="password" id="muvyo_apikey" placeholder="设置中心 → 配置 → 系统配置 → API Key">
+        <span class="muted">生成后点保存才生效；请求时放在 X-API-Key 头里</span></label>
+      <label class="f"><span>监控规则名（可选，推荐）</span>
+        <input type="text" id="muvyo_rule" placeholder="留空则按任务的 115 目标目录触发">
+        <span class="muted">同一个目录挂了多个网盘账号时，只有规则名能分清整理哪个账号</span></label>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button type="button" id="btnMuvyoTest">测试触发</button>
+      <span id="muvyoTip" class="muted"></span>
     </div>
 
     <div class="divider"></div>
@@ -497,6 +522,24 @@ async function refresh(){
       }
     }
 
+    if($('cooldownTip')){
+      const gate = s.notify_gate || {};
+      const names = {cms: 'CMS', muvyo: 'Muvyo'};
+      const items = [];
+      for(const ch of ['cms', 'muvyo']){
+        const it = gate[ch];
+        if(!it) continue;
+        if(it.pending){
+          items.push(`${names[ch]} 已合并 1 次触发，约 ${fmtWait(it.wait_sec)}后补发`);
+        }else if(it.wait_sec > 0){
+          items.push(`${names[ch]} 下次可触发：${fmtWait(it.wait_sec)}后`);
+        }else if(it.last){
+          items.push(`${names[ch]} 上次触发 ${it.last}`);
+        }
+      }
+      $('cooldownTip').textContent = items.join(' · ');
+    }
+
     if($('trUnmatched')){
       const un = s.tr_unmatched || [];
       $('trUnmatched').innerHTML = un.length
@@ -633,6 +676,13 @@ function esc(v){
     .replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 }
 
+function fmtWait(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if(sec < 60) return sec + ' 秒';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
+}
+
 function newTaskId(){
   return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 }
@@ -669,6 +719,8 @@ function renderTasks(){
           <input type="checkbox" class="t-keep" ${t.keep_source ? 'checked' : ''}>保留</label>
         <label class="chk" title="勾上表示这个目录秒传成功后通知 CMS 做增量同步（下载目录一般不用）">
           <input type="checkbox" class="t-cms" ${t.cms_notify === false ? '' : 'checked'}>CMS</label>
+        <label class="chk" title="勾上表示这个目录秒传成功后通知 Muvyo 触发目录监控整理、生成 STRM">
+          <input type="checkbox" class="t-muvyo" ${t.muvyo_notify === false ? '' : 'checked'}>MV</label>
       </div>
       <button type="button" class="t-del" data-i="${i}">删除</button>
     </div>`).join('');
@@ -691,6 +743,7 @@ function readTasksFromDom(){
     const enabled = row.querySelector('.t-enabled').checked;
     const keep = row.querySelector('.t-keep').checked;
     const cmsNotify = row.querySelector('.t-cms').checked;
+    const muvyoNotify = row.querySelector('.t-muvyo').checked;
     if(!watch) return;   // 没填本地目录的行直接忽略
     out.push({
       id: row.dataset.i !== undefined && tasks[Number(row.dataset.i)] && tasks[Number(row.dataset.i)].id
@@ -701,6 +754,7 @@ function readTasksFromDom(){
       enabled,
       keep_source: keep,
       cms_notify: cmsNotify,
+      muvyo_notify: muvyoNotify,
     });
   });
   return out;
@@ -766,6 +820,18 @@ $('btnWecomTest').onclick = async () => {
     $('wecomTip').textContent = '已发送，看一下企业微信';
   }catch(e){
     $('wecomTip').textContent = '失败：' + e.message;
+  }
+};
+
+$('btnMuvyoTest').onclick = async () => {
+  // 同样先把当前表单存了，测试用的才是新配置
+  $('muvyoTip').textContent = '触发中…';
+  try{
+    await api('/api/settings', {method:'POST', body: JSON.stringify(collectSettings())});
+    await api('/api/muvyo/test', {method:'POST'});
+    $('muvyoTip').textContent = '已触发，去 Muvyo 的整理记录里看一下';
+  }catch(e){
+    $('muvyoTip').textContent = '失败：' + e.message;
   }
 };
 

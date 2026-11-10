@@ -1,12 +1,14 @@
 """
-通知：企业微信应用消息 + CMS 增量同步
+通知：企业微信应用消息 + CMS 增量同步 + Muvyo 目录监控整理
 """
+import json
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from .config import get_settings
+from .config import DATA_DIR, _atomic_write, get_settings
 from .logger import get_logger
 
 _wecom_token_cache: Dict[str, Any] = {"token": "", "expire_at": 0}
@@ -14,6 +16,196 @@ _wecom_token_cache: Dict[str, Any] = {"token": "", "expire_at": 0}
 
 DEFAULT_WECOM_BASE = "https://qyapi.weixin.qq.com"
 logger = get_logger()
+
+# ------------------------------------------------------------------ 通知节流
+# CMS / Muvyo 都是"扫目录"型接口：短时间连续触发会互相打断，结果就是漏整理。
+# 所以每个通道各自做最小间隔（默认 5 分钟，设置页可改）：
+#   · 间隔内来的触发不丢弃，先攒着（pending）
+#   · 到点由 flush_pending() 合并补发一次
+#   · 状态落在 /config/notify_gate.json，重建容器也不会立刻重发
+GATE_FILE = DATA_DIR / "notify_gate.json"
+MAX_PENDING_DIRS = 50
+CHANNEL_LABEL = {"cms": "CMS", "muvyo": "Muvyo"}
+
+_gate_lock = threading.Lock()
+_gate: Optional[Dict[str, Any]] = None
+
+
+def _gate_blank() -> Dict[str, Any]:
+    return {
+        "cms": {"last": 0.0, "pending": False, "dirs": [], "last_error": ""},
+        "muvyo": {"last": 0.0, "pending": False, "dirs": [], "last_error": ""},
+    }
+
+
+def _gate_load() -> Dict[str, Any]:
+    global _gate
+    if _gate is not None:
+        return _gate
+    state = _gate_blank()
+    if GATE_FILE.exists():
+        try:
+            raw = json.loads(GATE_FILE.read_text(encoding="utf-8"))
+            for channel, item in (raw or {}).items():
+                if channel not in state or not isinstance(item, dict):
+                    continue
+                state[channel]["last"] = float(item.get("last") or 0)
+                state[channel]["pending"] = bool(item.get("pending"))
+                state[channel]["dirs"] = [
+                    str(d) for d in (item.get("dirs") or []) if str(d or "").strip()
+                ][:MAX_PENDING_DIRS]
+                state[channel]["last_error"] = str(item.get("last_error") or "")
+        except Exception as err:
+            logger.warning(f"[通知] 读取节流状态失败，按未触发处理：{err}")
+    _gate = state
+    return _gate
+
+
+def _gate_save() -> None:
+    if _gate is None:
+        return
+    try:
+        _atomic_write(GATE_FILE, _gate)
+    except Exception as err:
+        logger.warning(f"[通知] 保存节流状态失败：{err}")
+
+
+def notify_cooldown_seconds() -> int:
+    """两次触发之间的最小间隔（秒）；0 = 不限制"""
+    try:
+        minutes = int(float(str(get_settings().get("notify_cooldown_min", 5)).strip()))
+    except Exception:
+        minutes = 5
+    return max(0, min(1440, minutes)) * 60
+
+
+def _gate_remain(channel: str) -> float:
+    """还要等多少秒才能触发（<=0 表示现在就可以）"""
+    cooldown = notify_cooldown_seconds()
+    if cooldown <= 0:
+        return 0.0
+    return _gate_load()[channel]["last"] + cooldown - time.time()
+
+
+def _merge_dirs(item: Dict[str, Any], dirs: Optional[List[str]]) -> None:
+    merged = list(item.get("dirs") or [])
+    for path in dirs or []:
+        path = str(path or "").strip() or "/"
+        if path not in merged:
+            merged.append(path)
+    item["dirs"] = merged[:MAX_PENDING_DIRS]
+
+
+def _send_channel(channel: str, dirs: List[str]) -> Optional[str]:
+    cfg = get_settings()
+    if channel == "cms":
+        if not cfg.get("cms_enabled"):
+            return None
+        return trigger_cms()
+    if not cfg.get("muvyo_enabled"):
+        return None
+    return trigger_muvyo(dirs)
+
+
+def _gate_run(
+    channel: str, dirs: Optional[List[str]] = None, force: bool = False
+) -> Optional[str]:
+    """
+    节流 → 发送 → 记账。间隔内不发，只记 pending，等 flush_pending 补
+    """
+    label = CHANNEL_LABEL.get(channel, channel)
+    with _gate_lock:
+        item = _gate_load()[channel]
+        _merge_dirs(item, dirs)
+        remain = 0.0 if force else _gate_remain(channel)
+        if remain > 0:
+            item["pending"] = True
+            _gate_save()
+            minutes = max(1, notify_cooldown_seconds() // 60)
+            logger.info(
+                f"[{label}] 距上次触发不足 {minutes} 分钟，本轮合并，约 {int(remain)} 秒后补发"
+            )
+            return None
+        batch = list(item.get("dirs") or [])
+        item["dirs"] = []
+        item["last"] = time.time()
+        item["pending"] = False
+        _gate_save()
+
+    if batch and channel != "cms":
+        logger.info(f"[{label}] 本次触发目录：{'、'.join(batch)}")
+
+    err = _send_channel(channel, batch)
+
+    with _gate_lock:
+        item = _gate_load()[channel]
+        if err:
+            # 没发成功就把目录还回去，下个间隔再补，别丢
+            _merge_dirs(item, batch)
+            item["pending"] = True
+            item["last_error"] = err
+        else:
+            item["last_error"] = ""
+        _gate_save()
+    return err
+
+
+def flush_pending() -> List[str]:
+    """
+    主循环每两秒调一次：间隔到了就把攒下的触发合并补发
+    返回错误信息列表（空 = 没有任何需要补发的，或都成功了）
+    """
+    errors: List[str] = []
+    cooldown = notify_cooldown_seconds()
+    now = time.time()
+    ready: List[str] = []
+    with _gate_lock:
+        for channel in ("cms", "muvyo"):
+            item = _gate_load()[channel]
+            if not item["pending"]:
+                continue
+            if cooldown > 0 and now - item["last"] < cooldown:
+                continue
+            ready.append(channel)
+    for channel in ready:
+        label = CHANNEL_LABEL.get(channel, channel)
+        logger.info(f"[{label}] 间隔已到，补发之前合并的通知")
+        err = _gate_run(channel, force=True)
+        if err:
+            errors.append(err)
+    return errors
+
+
+def request_cms() -> Optional[str]:
+    """带最小间隔地通知 CMS 做增量同步"""
+    return _gate_run("cms")
+
+
+def request_muvyo(target_dirs: Optional[List[str]] = None) -> Optional[str]:
+    """带最小间隔地通知 Muvyo 整理目录"""
+    return _gate_run("muvyo", target_dirs)
+
+
+def notify_gate_info() -> Dict[str, Any]:
+    """给 /api/status 用：各通道上次触发时间、是否还有待补发的触发"""
+    cooldown = notify_cooldown_seconds()
+    now = time.time()
+    out: Dict[str, Any] = {}
+    with _gate_lock:
+        for channel in ("cms", "muvyo"):
+            item = _gate_load()[channel]
+            last = float(item.get("last") or 0)
+            remain = max(0.0, last + cooldown - now) if cooldown > 0 else 0.0
+            out[channel] = {
+                "last": time.strftime("%m-%d %H:%M:%S", time.localtime(last))
+                if last
+                else "",
+                "pending": bool(item.get("pending")),
+                "dirs": len(item.get("dirs") or []),
+                "wait_sec": int(remain),
+                "error": item.get("last_error") or "",
+            }
+    return out
 
 
 def _truncate(text: str, limit: int = 1800) -> str:
@@ -137,6 +329,66 @@ def trigger_cms() -> Optional[str]:
         return message
 
 
+def trigger_muvyo(
+    target_dirs: Optional[List[str]] = None, require_enabled: bool = True
+) -> Optional[str]:
+    """
+    通知 Muvyo 走一遍「目录监控整理」：转存/上传进网盘的目录，让它扫到并生成 STRM。
+    接口：POST /api/v1/monitor/trigger-organize
+      - name       监控规则名（推荐，同目录挂了多个网盘账号时只有它能分清）
+      - source_dir 监控源目录（该目录只对应一条规则时可用）
+    返回 None 表示成功，否则返回错误说明
+    """
+    cfg = get_settings()
+    if require_enabled and not cfg.get("muvyo_enabled"):
+        return "Muvyo 通知未启用"
+    base = str(cfg.get("muvyo_url") or "").strip().rstrip("/")
+    apikey = str(cfg.get("muvyo_apikey") or "").strip()
+    rule = str(cfg.get("muvyo_rule") or "").strip()
+    if not base:
+        return "Muvyo 配置不完整（管理面板地址必填）"
+    if not apikey:
+        return "Muvyo 配置不完整（API Key 必填）"
+
+    url = f"{base}/api/v1/monitor/trigger-organize"
+    headers = {"X-API-Key": apikey}
+
+    # 填了规则名就一次搞定；否则按各自任务的 115 目标目录分别触发
+    calls: List[Dict[str, str]] = []
+    if rule:
+        calls.append({"name": rule})
+    else:
+        for path in target_dirs or []:
+            path = str(path or "").strip() or "/"
+            if path not in [c.get("source_dir") for c in calls]:
+                calls.append({"source_dir": path})
+
+    for params in calls:
+        label = params.get("name") or params.get("source_dir") or "-"
+        logger.info(f"[Muvyo] 触发目录监控整理：{label}")
+        try:
+            resp = requests.post(url, params=params, headers=headers, timeout=20)
+            body = (resp.text or "").strip()
+            if resp.status_code >= 400:
+                message = f"Muvyo 返回 HTTP {resp.status_code}：{body[:200]}"
+                logger.warning(f"[Muvyo] 通知失败：{message}")
+                return message
+            try:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("success") is False:
+                    message = f"Muvyo 返回失败：{data.get('message') or data}"
+                    logger.warning(f"[Muvyo] 通知失败：{message}")
+                    return message
+                logger.info(f"[Muvyo] 通知成功：{str(data)[:150]}")
+            except Exception:
+                logger.info(f"[Muvyo] 通知成功：{body[:150]}")
+        except Exception as err:
+            message = f"Muvyo 通知异常：{err}"
+            logger.warning(f"[Muvyo] {message}")
+            return message
+    return None
+
+
 def _build_text(results: List[Dict[str, Any]]) -> tuple:
     """
     生成标题 + 正文（企业微信 markdown）。只讲清楚：哪些文件已经秒传成功
@@ -222,7 +474,17 @@ def notify_batch(results: List[Dict[str, Any]]) -> List[str]:
     # 任务可以单独关掉（比如下载目录只做秒传、不进媒体库）
     cms_items = [r for r in succeeded if r.get("cms", True)]
     if cms_items:
-        cms_err = trigger_cms()
+        cms_err = request_cms()
         if cms_err:
             errors.append(cms_err)
+
+    # 同理，Muvyo 也有独立开关 + 任务级勾选
+    muvyo_dirs = [
+        str(r.get("target_dir") or "/") for r in succeeded if r.get("muvyo", True)
+    ]
+    # 没开开关就当没配，不能把"未启用"记成错误（默认就是关的）
+    if muvyo_dirs and get_settings().get("muvyo_enabled"):
+        muvyo_err = request_muvyo(muvyo_dirs)
+        if muvyo_err:
+            errors.append(muvyo_err)
     return errors

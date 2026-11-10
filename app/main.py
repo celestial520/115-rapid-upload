@@ -20,6 +20,7 @@ from .auth import COOKIE_NAME, SESSION_TTL, Auth
 from .config import DATA_DIR, DEFAULTS, get_settings, load_settings, save_settings
 from .u115 import U115Client, U115Error
 from .worker import Worker
+from .notify import notify_gate_info
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE = BASE_DIR / "templates" / "index.html"
@@ -254,6 +255,7 @@ def api_status() -> Dict[str, Any]:
         "last_results": worker.last_results,
         "file_total": len(worker.state.get("files") or {}),
         "last_cleanup_count": worker.state.get("last_cleanup_count") or 0,
+        "notify_gate": notify_gate_info(),
     }
 
 
@@ -299,6 +301,23 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         )
     )
     return {"ok": True, "settings": api_settings()["settings"]}
+
+
+@app.post("/api/muvyo/test")
+def api_muvyo_test() -> Dict[str, Any]:
+    """试触发一次 Muvyo 的目录监控整理，确认地址 / API Key / 规则名对不对"""
+    from .notify import trigger_muvyo
+
+    cfg = get_settings()
+    dirs = [
+        str(t.get("target_dir") or "/")
+        for t in (cfg.get("tasks") or [])
+        if t.get("enabled", True)
+    ] or ["/"]
+    error = trigger_muvyo(dirs, require_enabled=False)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return {"ok": True}
 
 
 @app.post("/api/run")

@@ -71,8 +71,16 @@ DEFAULTS: Dict[str, Any] = {
     "cms_domain": "",
     "cms_token": "cloud_media_sync",
     "cms_type": "lift_sync",
+    # ---- Muvyo 通知（触发目录监控整理 / 生成 STRM） ----
+    "muvyo_enabled": False,
+    "muvyo_url": "",                  # 管理面板地址，如 http://192.168.1.10:7811
+    "muvyo_apikey": "",               # 设置中心 → 配置 → 系统配置 → API Key
+    "muvyo_rule": "",                 # 监控规则名；留空则按任务的 115 目标目录触发
     # ---- 通知内容 ----
     "notify_on_hold": True,
+    # 同一通道（CMS / Muvyo）两次触发的最小间隔（分钟）。
+    # 短时间连续触发会让 CMS / Muvyo 漏整理，间隔内的触发会合并、到点补发一次
+    "notify_cooldown_min": 5,
 }
 
 _lock = threading.Lock()
@@ -136,13 +144,15 @@ _BOOL_FIELDS = {
     "tr_enabled",
     "wecom_enabled",
     "cms_enabled",
+    "muvyo_enabled",
 }
 _INT_FIELDS = {
     "min_size_mb": (0, 1024 * 1024),
     "stable_seconds": (0, 86400),
     "tr_poll_sec": (5, 3600),
+    "notify_cooldown_min": (0, 1440),
 }
-_URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
+_URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy", "muvyo_url"}
 _STR_FIELDS = {
     "daily_scan_time",
     "cleanup_time",
@@ -153,6 +163,8 @@ _STR_FIELDS = {
     "wecom_touser",
     "cms_token",
     "cms_type",
+    "muvyo_apikey",
+    "muvyo_rule",
     "tr_username",
     "tr_password",
 }
@@ -211,6 +223,10 @@ def normalize_tasks(value: Any) -> list:
                 "enabled": _to_bool(item.get("enabled", True)),
                 "keep_source": _to_bool(item.get("keep_source", False)),
                 "cms_notify": _to_bool(item.get("cms_notify", True)),
+                # 老配置没有 muvyo_notify 时跟随 CMS 的勾选，避免升级后所有任务都被通知
+                "muvyo_notify": _to_bool(
+                    item.get("muvyo_notify", item.get("cms_notify", True))
+                ),
             }
         )
     return result
