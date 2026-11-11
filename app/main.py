@@ -20,11 +20,13 @@ from .auth import COOKIE_NAME, SESSION_TTL, Auth
 from .config import DATA_DIR, DEFAULTS, get_settings, load_settings, save_settings
 from .u115 import U115Client, U115Error
 from .worker import Worker
-from .notify import notify_gate_info
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
+
+# 版本号：页面右上角会显示，用来确认容器是否真的更新了
+APP_VERSION = "1.1"
 
 load_settings()
 auth = Auth()
@@ -205,7 +207,7 @@ def api_status() -> Dict[str, Any]:
     cfg = get_settings()
     token = client.token_info()
     return {
-        "version": "1.0",
+        "version": APP_VERSION,
         "enabled": bool(cfg.get("enabled")),
         "tasks": cfg.get("tasks") or [],
         "task_count": len([t for t in (cfg.get("tasks") or []) if t.get("enabled", True)]),
@@ -255,7 +257,6 @@ def api_status() -> Dict[str, Any]:
         "last_results": worker.last_results,
         "file_total": len(worker.state.get("files") or {}),
         "last_cleanup_count": worker.state.get("last_cleanup_count") or 0,
-        "notify_gate": notify_gate_info(),
     }
 
 
@@ -301,53 +302,6 @@ def api_save_settings(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         )
     )
     return {"ok": True, "settings": api_settings()["settings"]}
-
-
-@app.post("/api/muvyo/test")
-def api_muvyo_test() -> Dict[str, Any]:
-    """
-    试触发一次 Muvyo 的目录监控整理，确认地址 / API Key / 规则名对不对。
-    优先测「勾了 MV」的任务目录——没勾的目录 Muvyo 本来就没规则，测了也是白报错
-    """
-    from .notify import trigger_muvyo_report
-
-    cfg = get_settings()
-    tasks = [t for t in (cfg.get("tasks") or []) if t.get("enabled", True)]
-    picked = [
-        str(t.get("target_dir") or "/")
-        for t in tasks
-        if t.get("muvyo_notify", True)
-    ]
-    if not picked:
-        picked = [str(t.get("target_dir") or "/") for t in tasks]
-    if not picked:
-        picked = ["/"]
-
-    report = trigger_muvyo_report(picked, require_enabled=False)
-    error = report.get("error")
-    sent = report.get("sent") or []
-    missing = report.get("missing") or []
-    failed = report.get("failed") or []
-    if error and not sent:
-        raise HTTPException(status_code=400, detail=error)
-
-    if sent:
-        message = "已触发：" + "、".join(sent)
-        if missing:
-            message += (
-                "；" + "、".join(missing) + " 在 Muvyo 里没有监控规则，已跳过"
-                "（真实秒传也不会触发它）"
-            )
-        for item in failed[:2]:
-            message += "；" + item["error"]
-    else:
-        message = "已触发"
-    return {
-        "ok": True,
-        "message": message,
-        "sent": sent,
-        "missing": missing,
-    }
 
 
 @app.post("/api/run")

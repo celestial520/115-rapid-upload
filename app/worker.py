@@ -13,7 +13,7 @@ import requests
 
 from .config import get_settings, load_state, save_state
 from .logger import get_logger
-from .notify import flush_pending, notify_batch
+from .notify import notify_batch
 from .u115 import U115Client, U115Error
 
 logger = get_logger()
@@ -133,23 +133,10 @@ class Worker:
                             self.run_once(skip_stable=True, event_files=buckets, source=src)
                     self._maybe_daily_scan(cfg)
                     self._maybe_cleanup(cfg)
-                    self._flush_notifications()
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
                 logger.warning(f"[worker] 本轮出错：{err}")
             self._stop.wait(2)
-
-    def _flush_notifications(self) -> None:
-        """
-        CMS / Muvyo 有 5 分钟最小间隔（设置页可改）。
-        间隔内来的触发先攒着，这里每轮检查一次，到点补发
-        """
-        try:
-            for err in flush_pending():
-                self.last_error = err
-                logger.warning(f"[worker] 补发通知失败：{err}")
-        except Exception as err:
-            logger.warning(f"[worker] 补发通知出错：{err}")
 
     def _maybe_daily_scan(self, cfg: Dict[str, Any]) -> None:
         """
@@ -373,16 +360,6 @@ class Worker:
                         item.setdefault(
                             "cms", bool(task.get("cms_notify", True))
                         )
-                        item.setdefault(
-                            "muvyo",
-                            bool(
-                                task.get(
-                                    "muvyo_notify", task.get("cms_notify", True)
-                                )
-                            ),
-                        )
-                        # 通知 Muvyo 时按这个 115 目录去找监控规则
-                        item.setdefault("target_dir", task.get("target_dir") or "/")
                         self._log_item(task, item)
                         results.append(item)
                     self._persist()
