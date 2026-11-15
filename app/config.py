@@ -71,6 +71,10 @@ DEFAULTS: Dict[str, Any] = {
     "cms_domain": "",
     "cms_token": "cloud_media_sync",
     "cms_type": "lift_sync",
+    # 连续秒传多集时，通知合并：最后一批完成后再静默这么久才发
+    "cms_quiet_sec": 90,
+    # 两次 CMS 通知的最小间隔；间隔内的触发合并，到点补发一次
+    "cms_cooldown_sec": 300,
     # ---- 通知内容 ----
     "notify_on_hold": True,
 }
@@ -141,6 +145,8 @@ _INT_FIELDS = {
     "min_size_mb": (0, 1024 * 1024),
     "stable_seconds": (0, 86400),
     "tr_poll_sec": (5, 3600),
+    "cms_quiet_sec": (0, 600),
+    "cms_cooldown_sec": (0, 3600),
 }
 _URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
 _STR_FIELDS = {

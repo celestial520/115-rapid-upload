@@ -352,6 +352,15 @@
           <option value="auto_organize">增量同步 + 自动整理</option>
         </select>
       </label>
+      <label class="f"><span>合并静默（秒）</span><input type="number" id="cms_quiet_sec" min="0" max="600" step="10">
+        <span class="muted">最后一批秒传完成后再等这么久才通知 CMS，等 115 目录列表同步完成；连着下多集时不会漏整理</span></label>
+      <label class="f"><span>最小间隔（秒）</span><input type="number" id="cms_cooldown_sec" min="0" max="3600" step="30">
+        <span class="muted">两次通知的最短间隔；间隔内的触发会合并，到点补发一次，失败自动重试</span></label>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+      <button type="button" id="btnCmsTest">立即测试通知</button>
+      <span id="cmsTip" class="muted">测试会直接触发一次 CMS 增量同步，不进合并队列</span>
+      <span id="cmsGateTip" class="muted"></span>
     </div>
 
     <div class="divider"></div>
@@ -487,6 +496,15 @@ async function refresh(){
     $('cTargets').textContent = targets.length ? targets.join('、') : '-';
     $('cRun').textContent = s.last_run_at || '还没跑过';
     $('cMode').textContent = s.delete_source ? '复制到网盘 + 删除源文件' : '复制到网盘 + 保留源文件';
+
+    if($('cmsGateTip')){
+      const g = s.cms_gate;
+      if(!g) $('cmsGateTip').textContent = '';
+      else if(g.pending) $('cmsGateTip').textContent = `待发：${g.wait_sec} 秒后合并通知 CMS`;
+      else if(g.last_error) $('cmsGateTip').textContent = '上次通知失败：' + g.last_error;
+      else if(g.last_result) $('cmsGateTip').textContent = '上次通知 CMS：' + g.last_result;
+      else $('cmsGateTip').textContent = '';
+    }
 
     if($('trTip')){
       if(!s.tr_enabled){
@@ -625,6 +643,17 @@ function collectSettings(){
   out.tr_path_map = readMapsFromDom();
   return out;
 }
+
+$('btnCmsTest').onclick = async () => {
+  const tip = $('cmsTip');
+  tip.textContent = '正在通知 CMS…';
+  try{
+    const r = await api('/api/cms/test', {method:'POST'});
+    tip.textContent = r && r.ok ? (r.message || '已通知 CMS') : ('失败：' + ((r && r.message) || '网络错误'));
+  }catch(e){
+    tip.textContent = '失败：' + (e && e.message ? e.message : '网络错误');
+  }
+};
 
 // ---------------- 监控任务编辑器 ----------------
 let tasks = [];
