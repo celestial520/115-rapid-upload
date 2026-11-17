@@ -18,7 +18,6 @@ logger = get_logger()
 
 from .auth import COOKIE_NAME, SESSION_TTL, Auth
 from .config import DATA_DIR, DEFAULTS, get_settings, load_settings, save_settings
-from .notify import cms_gate_info
 from .u115 import U115Client, U115Error
 from .worker import Worker
 
@@ -27,7 +26,7 @@ TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
 
 # 版本号：页面右上角会显示，用来确认容器是否真的更新了
-APP_VERSION = "1.2"
+APP_VERSION = "1.1"
 
 load_settings()
 auth = Auth()
@@ -170,18 +169,6 @@ def api_wecom_test() -> Dict[str, Any]:
     return {"ok": True}
 
 
-@app.post("/api/cms/test")
-def api_cms_test() -> Dict[str, Any]:
-    """立即直连通知一次 CMS（不进合并队列），用来确认地址 / token / type 是否配对"""
-    from .notify import trigger_cms
-
-    error = trigger_cms()
-    return {
-        "ok": error is None,
-        "message": error or "CMS 已收到通知，请到 CMS 日志确认整理任务",
-    }
-
-
 @app.get("/api/health")
 def api_health() -> Dict[str, Any]:
     return {"ok": True}
@@ -268,7 +255,6 @@ def api_status() -> Dict[str, Any]:
         else "",
         "last_error": worker.last_error,
         "last_results": worker.last_results,
-        "cms_gate": cms_gate_info(),
         "file_total": len(worker.state.get("files") or {}),
         "last_cleanup_count": worker.state.get("last_cleanup_count") or 0,
     }

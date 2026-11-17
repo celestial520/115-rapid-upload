@@ -13,32 +13,13 @@ import requests
 
 from .config import get_settings, load_state, save_state
 from .logger import get_logger
-from .notify import flush_cms, notify_batch
+from .notify import notify_batch
 from .u115 import U115Client, U115Error
 
 logger = get_logger()
 
 CHUNK = 4 * 1024 * 1024
 PREID_SIZE = 128 * 1024 * 1024
-
-# 网盘目录 cid 缓存有效期：CMS 自动整理会把「待整理」下的目录移走/删掉，
-# 旧 cid 随之失效，115 会报「云端目录不存在，请恢复后重新上传」。
-# 事件触发的扫描不会清缓存，所以这里加 TTL，并在报错时主动重建重试。
-CID_CACHE_TTL = 600
-
-
-def _is_stale_dir_error(err: Exception) -> bool:
-    text = str(err)
-    return any(
-        key in text
-        for key in (
-            "目录不存在",
-            "目录已删除",
-            "目录失效",
-            "folder not exist",
-            "folder_not_exist",
-        )
-    )
 
 
 def fmt_size(size: int) -> str:
@@ -72,9 +53,8 @@ class Worker:
         self.state: Dict[str, Any] = load_state()
         self.state.setdefault("files", {})
         self._lock = threading.Lock()
-        # 网盘目录 cid 缓存：net_path -> cid（全量扫描清空，另有 TTL 兜底）
+        # 网盘目录 cid 缓存：net_path -> cid（每轮扫描开始时清空）
         self._cid_cache: Dict[str, str] = {}
-        self._cid_cache_at: Dict[str, float] = {}
         # 文件系统事件：等待处理的路径 -> 最后一次事件时间
         self._pending: Dict[str, float] = {}
         self._pending_sig: Dict[str, Tuple[int, int]] = {}
@@ -156,14 +136,6 @@ class Worker:
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
                 logger.warning(f"[worker] 本轮出错：{err}")
-            # CMS 通知是合并补发的，放在 enabled 判断外面：
-            # 就算暂停了扫描，之前攒下的那一批也必须按时发出去，不能丢
-            try:
-                cms_err = flush_cms()
-                if cms_err:
-                    self.last_error = cms_err
-            except Exception as err:
-                logger.warning(f"[worker] CMS 补发出错：{err}")
             self._stop.wait(2)
 
     def _maybe_daily_scan(self, cfg: Dict[str, Any]) -> None:
@@ -333,8 +305,7 @@ class Worker:
             return []
         self.running_scan = True
         if event_files is None:
-            self._cid_cache = {}       # 全量扫描才刷新目录缓存
-            self._cid_cache_at = {}
+            self._cid_cache = {}   # 全量扫描才刷新目录缓存
         results: List[Dict[str, Any]] = []
         try:
             cfg = get_settings()
@@ -386,8 +357,9 @@ class Worker:
                         }
                         self.last_error = str(err)
                     if item:
-                        # 显式赋值，别让持久化/历史数据里的旧字段把整轮 CMS 通知关掉
-                        item["cms"] = bool(task.get("cms_notify", True))
+                        item.setdefault(
+                            "cms", bool(task.get("cms_notify", True))
+                        )
                         self._log_item(task, item)
                         results.append(item)
                     self._persist()
@@ -478,34 +450,14 @@ class Worker:
         record["tries"] = int(record.get("tries") or 0) + 1
         record["source"] = source
 
-        def _upload(target: str):
-            return self.client.rapid_upload(
-                target,
-                path.name,
-                size,
-                sha1,
-                preid,
-                sign_resolver=lambda check: self._sign_value(path, check),
-            )
-
-        try:
-            ok, detail = _upload(target_cid)
-        except Exception as err:
-            if not _is_stale_dir_error(err):
-                raise
-            # CMS 自动整理会把「待整理」下的目录移走/删掉，缓存里的 cid 随之失效，
-            # 115 返回「云端目录不存在，请恢复后重新上传」。
-            # 旧逻辑直接判失败，只能等次日全量扫描清缓存才成功 —— 这里立刻重建目录再试一次。
-            logger.warning(
-                f"[worker] {rel_posix} 网盘目录 cid 已失效（{err}），重建目录后重试"
-            )
-            self._invalidate_cid(net_dir)
-            target_cid = self._ensure_sub_dir(
-                cid, task.get("target_dir") or "/", net_dir
-            )
-            ok, detail = _upload(target_cid)
-            if ok:
-                logger.info(f"[worker] {rel_posix} 目录重建后秒传成功")
+        ok, detail = self.client.rapid_upload(
+            target_cid,
+            path.name,
+            size,
+            sha1,
+            preid,
+            sign_resolver=lambda check: self._sign_value(path, check),
+        )
 
         if ok:
             record["status"] = "done"
@@ -609,24 +561,16 @@ class Worker:
     def _ensure_sub_dir(self, root_cid: str, base_dir: str, net_dir: str) -> str:
         """
         解析/创建网盘子目录的 cid。网盘里已有同名目录就直接复用（天然是"合并"）
-        缓存带 TTL：CMS 整理随时可能把目录移走，不能一份 cid 一直用下去
         """
         base = str(base_dir or "/").rstrip("/") or "/"
         if not net_dir or net_dir in ("/", base):
             return root_cid   # 就是任务根目录，直接用已有的 cid
         cached = self._cid_cache.get(net_dir)
-        cached_at = float(self._cid_cache_at.get(net_dir) or 0)
-        if cached and time.time() - cached_at < CID_CACHE_TTL:
+        if cached:
             return cached
         cid = self.client.ensure_dir(net_dir)
         self._cid_cache[net_dir] = cid
-        self._cid_cache_at[net_dir] = time.time()
         return cid
-
-    def _invalidate_cid(self, net_dir: str) -> None:
-        """目录被外部（CMS 自动整理）改动后，丢掉缓存重新解析"""
-        self._cid_cache.pop(net_dir, None)
-        self._cid_cache_at.pop(net_dir, None)
 
     def _finish_local(
         self, path: Path, cfg: Dict[str, Any], task: Optional[Dict[str, Any]] = None
