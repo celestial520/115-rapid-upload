@@ -322,7 +322,11 @@
       <div class="check"><input type="checkbox" id="cleanup_enabled"><label for="cleanup_enabled">每天清理空文件夹</label></div>
       <label class="f"><span>每天几点清理空文件夹</span><input type="time" id="cleanup_time"></label>
       <div class="check"><input type="checkbox" id="notify_on_hold"><label for="notify_on_hold">被拦截时也发通知</label></div>
+      <label class="f" style="grid-column:1/-1"><span>CMS 通知合并间隔（分钟）</span>
+        <input type="number" id="notify_cooldown_min" min="0" max="1440" step="1" placeholder="5" style="max-width:150px">
+        <span class="muted" style="margin-top:6px">两次 CMS 增量同步至少隔这么久。间隔里来的触发不会丢，会合并、到点补发一次（连续触发会让 CMS 漏整理）。只影响 CMS，不影响秒传和企业微信。填 0 关闭</span></label>
     </div>
+    <div id="cooldownTip" class="muted" style="margin-top:8px"></div>
 
     <div class="divider"></div>
     <h3>企业微信通知</h3>
@@ -499,6 +503,19 @@ async function refresh(){
       }
     }
 
+    if($('cooldownTip')){
+      const g = s.notify_gate || {};
+      if(g.pending){
+        $('cooldownTip').textContent = `CMS 已合并 1 次触发，约 ${fmtWait(g.wait_sec)}后补发`
+          + (g.error ? ' · 最近错误：' + g.error : '');
+      }else if(g.wait_sec > 0){
+        $('cooldownTip').textContent = `CMS 下次可触发：${fmtWait(g.wait_sec)}后`
+          + (g.error ? ' · 最近错误：' + g.error : '');
+      }else{
+        $('cooldownTip').textContent = g.last ? `CMS 上次触发 ${g.last}` : '';
+      }
+    }
+
     if($('trUnmatched')){
       const un = s.tr_unmatched || [];
       $('trUnmatched').innerHTML = un.length
@@ -633,6 +650,13 @@ let pathMaps = [];
 function esc(v){
   return String(v === undefined || v === null ? '' : v)
     .replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+function fmtWait(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if(sec < 60) return sec + ' 秒';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
 }
 
 function newTaskId(){

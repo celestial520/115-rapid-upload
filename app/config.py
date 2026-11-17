@@ -73,6 +73,9 @@ DEFAULTS: Dict[str, Any] = {
     "cms_type": "lift_sync",
     # ---- 通知内容 ----
     "notify_on_hold": True,
+    # CMS 两次触发的最小间隔（分钟）。短时间连续触发会让 CMS 漏整理，
+    # 间隔内的触发会合并、到点补发一次。填 0 关闭
+    "notify_cooldown_min": 5,
 }
 
 _lock = threading.Lock()
@@ -141,6 +144,7 @@ _INT_FIELDS = {
     "min_size_mb": (0, 1024 * 1024),
     "stable_seconds": (0, 86400),
     "tr_poll_sec": (5, 3600),
+    "notify_cooldown_min": (0, 1440),
 }
 _URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
 _STR_FIELDS = {

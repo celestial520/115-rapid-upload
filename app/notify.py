@@ -1,12 +1,14 @@
 """
 通知：企业微信应用消息 + CMS 增量同步
 """
+import json
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from .config import get_settings
+from .config import DATA_DIR, _atomic_write, get_settings
 from .logger import get_logger
 
 _wecom_token_cache: Dict[str, Any] = {"token": "", "expire_at": 0}
@@ -14,6 +16,122 @@ _wecom_token_cache: Dict[str, Any] = {"token": "", "expire_at": 0}
 
 DEFAULT_WECOM_BASE = "https://qyapi.weixin.qq.com"
 logger = get_logger()
+
+# ------------------------------------------------------------------ CMS 通知节流
+# CMS 是"扫目录"型接口：短时间连续触发会互相打断，结果就是漏整理。
+# 做最小间隔（默认 5 分钟，设置页可改）：
+#   · 间隔内来的触发不丢弃，先记 pending
+#   · 到点由 flush_pending() 合并补发一次
+#   · 状态落在 /config/notify_gate.json，重建容器也不会立刻重发
+GATE_FILE = DATA_DIR / "notify_gate.json"
+_gate_lock = threading.Lock()
+_gate: Optional[Dict[str, Any]] = None
+
+
+def _gate_blank() -> Dict[str, Any]:
+    return {"last": 0.0, "pending": False, "last_error": ""}
+
+
+def _gate_load() -> Dict[str, Any]:
+    global _gate
+    if _gate is not None:
+        return _gate
+    state = _gate_blank()
+    if GATE_FILE.exists():
+        try:
+            raw = json.loads(GATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                state["last"] = float(raw.get("last") or 0)
+                state["pending"] = bool(raw.get("pending"))
+                state["last_error"] = str(raw.get("last_error") or "")
+        except Exception as err:
+            logger.warning(f"[CMS] 读取节流状态失败，按未触发处理：{err}")
+    _gate = state
+    return _gate
+
+
+def _gate_save() -> None:
+    if _gate is None:
+        return
+    try:
+        _atomic_write(GATE_FILE, _gate)
+    except Exception as err:
+        logger.warning(f"[CMS] 保存节流状态失败：{err}")
+
+
+def notify_cooldown_seconds() -> int:
+    """两次触发之间的最小间隔（秒）；0 = 不限制"""
+    try:
+        minutes = int(float(str(get_settings().get("notify_cooldown_min", 5)).strip()))
+    except Exception:
+        minutes = 5
+    return max(0, min(1440, minutes)) * 60
+
+
+def _gate_remain() -> float:
+    """还要等多少秒才能触发（<=0 表示现在就可以）"""
+    cooldown = notify_cooldown_seconds()
+    if cooldown <= 0:
+        return 0.0
+    return _gate_load()["last"] + cooldown - time.time()
+
+
+def request_cms() -> Optional[str]:
+    """
+    带最小间隔地通知 CMS 做增量同步。
+    间隔内不发，只记 pending，等主循环到点补发；企业微信不受此限制。
+    """
+    with _gate_lock:
+        item = _gate_load()
+        remain = _gate_remain()
+        if remain > 0:
+            item["pending"] = True
+            _gate_save()
+            minutes = max(1, notify_cooldown_seconds() // 60)
+            logger.info(
+                f"[CMS] 距上次触发不足 {minutes} 分钟，本轮合并，约 {int(remain)} 秒后补发"
+            )
+            return None
+        item["last"] = time.time()
+        item["pending"] = False
+        _gate_save()
+
+    err = trigger_cms()
+
+    with _gate_lock:
+        item = _gate_load()
+        if err:
+            # 发送失败：保留 pending，到点后再试一次，别丢掉这次整理
+            item["pending"] = True
+        item["last_error"] = err or ""
+        _gate_save()
+    return err
+
+
+def flush_pending() -> List[str]:
+    """主循环每轮调一次：间隔到了就把攒下的 CMS 触发补发一次"""
+    cooldown = notify_cooldown_seconds()
+    with _gate_lock:
+        item = _gate_load()
+        if not item["pending"] or (cooldown > 0 and time.time() - item["last"] < cooldown):
+            return []
+    logger.info("[CMS] 间隔已到，补发之前合并的通知")
+    err = request_cms()
+    return [err] if err else []
+
+
+def notify_gate_info() -> Dict[str, Any]:
+    """给 /api/status 用：上次触发时间、是否还有待补发的触发"""
+    cooldown = notify_cooldown_seconds()
+    with _gate_lock:
+        item = _gate_load()
+        last = float(item.get("last") or 0)
+        return {
+            "last": time.strftime("%m-%d %H:%M:%S", time.localtime(last)) if last else "",
+            "pending": bool(item.get("pending")),
+            "wait_sec": max(0, int(last + cooldown - time.time())) if cooldown > 0 else 0,
+            "error": item.get("last_error") or "",
+        }
 
 
 def _truncate(text: str, limit: int = 1800) -> str:
@@ -222,7 +340,7 @@ def notify_batch(results: List[Dict[str, Any]]) -> List[str]:
     # 任务可以单独关掉（比如下载目录只做秒传、不进媒体库）
     cms_items = [r for r in succeeded if r.get("cms", True)]
     if cms_items:
-        cms_err = trigger_cms()
+        cms_err = request_cms()
         if cms_err:
             errors.append(cms_err)
     return errors
