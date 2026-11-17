@@ -14,7 +14,7 @@ import requests
 from .config import get_settings, load_state, save_state
 from .logger import get_logger
 from .notify import flush_pending, notify_batch
-from .u115 import U115Client, U115Error
+from .u115 import U115Client, U115Error, U115RiskError
 
 logger = get_logger()
 
@@ -85,6 +85,40 @@ class Worker:
         self.last_run_at: float = float(self.state.get("last_run") or 0)
         self.last_results: List[Dict[str, Any]] = list(self.state.get("last_results") or [])
         self.last_error: str = ""
+        # 115 风控冷却：命中 429/405 后暂停上传，到点自动恢复（落盘，重启不清零）
+        self.risk_state: Dict[str, Any] = dict(self.state.get("risk") or {})
+        self.risk_state.setdefault("until", 0.0)
+        self.risk_state.setdefault("count", 0)
+        self.risk_state.setdefault("last", "")
+
+    # ---------------------------------------------------------------- 风控冷却
+
+    def _risk_remain(self) -> float:
+        """风控冷却还剩多少秒（<=0 表示已恢复）"""
+        return max(0.0, float(self.risk_state.get("until") or 0) - time.time())
+
+    def _enter_risk_cooldown(self, message: str) -> None:
+        """命中风控：按配置暂停一段时间，期间的触发不丢，只是延后"""
+        cfg = get_settings()
+        minutes = max(0, min(1440, int(cfg.get("risk_cooldown_min") or 0)))
+        self.risk_state["until"] = time.time() + minutes * 60
+        self.risk_state["count"] = int(self.risk_state.get("count") or 0) + 1
+        self.risk_state["last"] = time.strftime("%m-%d %H:%M:%S")
+        self.state["risk"] = self.risk_state
+        self._persist()
+        logger.warning(
+            f"[worker] 触发 115 风控，暂停上传 {minutes} 分钟：{message}"
+        )
+
+    def _risk_ready(self) -> bool:
+        """每轮开始时检查：还在冷却就跳过这一轮，避免继续撞风控"""
+        if self._risk_remain() <= 0:
+            return True
+        if not getattr(self, "_risk_logged", False):
+            remain = int(self._risk_remain())
+            logger.warning(f"[worker] 115 风控冷却中，剩余 {remain} 秒，跳过本轮上传")
+            self._risk_logged = True
+        return False
 
     # ---------------------------------------------------------------- 线程
 
@@ -328,6 +362,22 @@ class Worker:
                 self.last_error = "还没有配置监控任务（本地目录 → 115 目录）"
                 return []
 
+            # 风控冷却期：整轮跳过，别继续撞 115。
+            # 事件触发的文件已经被 _flush_events 从 _pending 弹出，必须放回去，否则会丢
+            if not self._risk_ready():
+                if event_files:
+                    now = time.time()
+                    for paths in event_files.values():
+                        for p in paths:
+                            self._pending[p.as_posix()] = now
+                return []
+
+            max_files = max(1, min(500, int(cfg.get("max_files_per_run") or 10)))
+            delay = max(0, min(300, int(cfg.get("upload_delay_sec") or 0)))
+            processed = 0
+            skipped = 0
+            self._risk_logged = False
+
             for task in tasks:
                 if self._stop.is_set():
                     break
@@ -349,13 +399,45 @@ class Worker:
                     ]
                 else:
                     candidates = self._list_candidates(watch, cfg)
+
+                # 没轮到的事件文件放回 _pending，下一轮继续；全量扫描的文件本来就会再扫到
+                def requeue(paths: List[Path]) -> None:
+                    nonlocal skipped
+                    skipped += len(paths)
+                    if event_files is not None:
+                        now = time.time()
+                        for p in paths:
+                            self._pending[p.as_posix()] = now
+
+                if self._risk_remain() > 0:
+                    requeue(candidates)
+                    continue
+
                 for path in candidates:
                     if self._stop.is_set():
+                        if event_files is not None:
+                            requeue([p for p in candidates if p != path])
                         break
+                    # 每轮上限：超出的放回队列，留到下一轮，不会丢
+                    if processed >= max_files:
+                        requeue(candidates[candidates.index(path):])
+                        break
+                    # 相邻文件之间强制间隔，降低 115 的请求速率
+                    if processed > 0 and delay > 0:
+                        self._stop.wait(delay)
+                        if self._stop.is_set():
+                            requeue(candidates[candidates.index(path):])
+                            break
                     try:
                         item = self._process(
                             path, watch, cid, cfg, skip_stable, task, source
                         )
+                        processed += 1
+                    except U115RiskError as err:
+                        self._enter_risk_cooldown(str(err))
+                        # 当前这个文件也没传成功，和后面的一起放回队列
+                        requeue(candidates[candidates.index(path):])
+                        break
                     except Exception as err:
                         item = {
                             "file": path.name,
@@ -373,6 +455,12 @@ class Worker:
                         self._log_item(task, item)
                         results.append(item)
                     self._persist()
+
+            if skipped:
+                logger.info(
+                    f"[worker] 本轮限流：已处理 {processed} 个，{skipped} 个留到下一轮"
+                    + (f"（风控冷却剩余 {int(self._risk_remain())} 秒）" if self._risk_remain() > 0 else "")
+                )
 
             self.last_run_at = time.time()
             self.last_results = results[-50:]

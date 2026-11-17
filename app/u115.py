@@ -34,6 +34,11 @@ class U115Error(Exception):
     pass
 
 
+class U115RiskError(U115Error):
+    """115 触发风控（429 限流 / 405 操作频繁）：需要冷却，不是普通失败"""
+    pass
+
+
 class U115Client:
     def __init__(self):
         self.session = requests.Session()
@@ -202,11 +207,26 @@ class U115Client:
             method, f"{API_BASE}{endpoint}", params=params, data=data, timeout=timeout
         )
         if resp.status_code == 429:
-            raise U115Error("115 接口限流（429），稍后再试")
-        resp.raise_for_status()
+            raise U115RiskError("115 接口限流（429），触发风控")
+        if resp.status_code == 405:
+            raise U115RiskError("115 返回 405（操作频繁/风控），需要暂停")
+        try:
+            resp.raise_for_status()
+        except Exception as err:
+            # 115 的风控也可能以其它 4xx 出现，统一当风控处理，让 worker 冷却
+            if 400 <= getattr(resp, "status_code", 0) < 500:
+                raise U115RiskError(
+                    f"115 接口返回 HTTP {resp.status_code}（疑似风控）：{err}"
+                )
+            raise
         payload = resp.json()
         if payload.get("code") not in accepted_codes:
-            raise U115Error(payload.get("message") or f"接口 {endpoint} 返回异常")
+            # 业务码里的风控（405 / 429 / 常见"操作频繁"文案）
+            code = payload.get("code")
+            message = str(payload.get("message") or "")
+            if str(code) in ("405", "429") or "频繁" in message or "上限" in message:
+                raise U115RiskError(f"115 风控（code={code}）：{message}")
+            raise U115Error(message or f"接口 {endpoint} 返回异常")
         return payload
 
     # ---------------------------------------------------------------- 目录

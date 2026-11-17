@@ -378,6 +378,18 @@
           本工具不依赖 MoviePilot 运行；想用自己的应用名，请到 open.115.com 申请后把 client_id 填这里</span></label>
     </div>
 
+    <div class="divider"></div>
+    <h3>上传节奏（防 115 风控 / 405）</h3>
+    <div class="grid">
+      <label class="f"><span>每轮最多处理文件数</span><input type="number" id="max_files_per_run" min="1" max="500" step="1" placeholder="10">
+        <span class="muted">一轮扫描最多传几个，剩下的下一轮继续（不会丢）。工具是串行上传，这个就是 CD2「最大上传任务数」的等价控制</span></label>
+      <label class="f"><span>上传间隔（秒）</span><input type="number" id="upload_delay_sec" min="0" max="300" step="1" placeholder="10">
+        <span class="muted">相邻两个文件之间至少等待几秒，对应 CD2 的「上传延迟」。降到 0 表示不限速（容易触发风控）</span></label>
+      <label class="f" style="grid-column:1/-1"><span>风控冷却（分钟）</span><input type="number" id="risk_cooldown_min" min="0" max="1440" step="1" placeholder="30" style="max-width:150px">
+        <span class="muted">115 返回 429 / 405 后暂停上传这么久，到点自动恢复；冷却期内的文件留到恢复后传，不算失败。填 0 关闭自动冷却</span></label>
+    </div>
+    <div id="riskTip" class="muted" style="margin-top:8px"></div>
+
     <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
       <button id="btnSave" class="primary">保存设置</button>
       <span id="saveTip" class="muted"></span>
@@ -501,6 +513,14 @@ async function refresh(){
       }else{
         $('trTip').textContent = '未连接：' + (s.tr_error || '检查地址/账号');
       }
+    }
+
+    if($('riskTip')){
+      const r = s.risk || {};
+      $('riskTip').textContent = r.remain > 0
+        ? `⚠ 115 风控冷却中，剩余 ${fmtWait(r.remain)}（已触发 ${r.count} 次，上次 ${r.last}），期间不上传`
+        : (r.count ? `上次风控 ${r.last}，已恢复上传（累计 ${r.count} 次）` : '');
+      $('riskTip').style.color = r.remain > 0 ? 'var(--warn)' : '';
     }
 
     if($('cooldownTip')){

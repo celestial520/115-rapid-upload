@@ -40,6 +40,14 @@ DEFAULTS: Dict[str, Any] = {
     "min_size_mb": 0,
     "recursive": True,
     "stable_seconds": 30,             # 最后一次变化后静置多久才处理（事件触发时=响应延迟）
+    # ---- 上传节奏（防 115 风控 / 405）----
+    # 每轮最多处理多少个文件；工具是串行处理，抄不了 CD2 的"并发上传数"，
+    # 这个等价于控制单位时间内打出去的请求量
+    "max_files_per_run": 10,
+    # 相邻两个文件之间至少间隔多少秒（CD2 的"上传延迟"）
+    "upload_delay_sec": 10,
+    # 命中 429/405 风控后暂停多少分钟；期间所有上传停摆，到点自动恢复
+    "risk_cooldown_min": 30,
     # 文件系统事件（inotify）：监控目录一有变化就处理，几乎不扫盘
     "watch_events_enabled": True,
     # 每天固定时间全量扫一次（处理"从别处移进来"的文件，也顺手重试之前失败的文件）
@@ -145,6 +153,9 @@ _INT_FIELDS = {
     "stable_seconds": (0, 86400),
     "tr_poll_sec": (5, 3600),
     "notify_cooldown_min": (0, 1440),
+    "max_files_per_run": (1, 500),
+    "upload_delay_sec": (0, 300),
+    "risk_cooldown_min": (0, 1440),
 }
 _URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
 _STR_FIELDS = {
