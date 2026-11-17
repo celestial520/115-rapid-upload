@@ -147,6 +147,14 @@ class Worker:
             cfg = get_settings()
             try:
                 if cfg.get("enabled"):
+                    if not cfg.get("tr_enabled"):
+                        self._clear_stale_missing()
+                    else:
+                        # 路径映射配置变了：旧警告里的路径已失效，清掉重新判定
+                        map_sig = str(cfg.get("tr_path_map") or [])
+                        if getattr(self, "_map_sig", None) != map_sig:
+                            self._map_sig = map_sig
+                            self._clear_stale_missing()
                     if cfg.get("watch_events_enabled", True):
                         self._flush_events(cfg)
                     if self._forced:
@@ -172,6 +180,11 @@ class Worker:
                 self.last_error = str(err)
                 logger.warning(f"[worker] 本轮出错：{err}")
             self._stop.wait(2)
+
+    def _clear_stale_missing(self) -> None:
+        """下载器关闭后清掉残留的路径映射警告，避免页面上一直挂着历史错误"""
+        if self.tr_state.get("missing"):
+            self.tr_state["missing"] = {}
 
     def _flush_notifications(self) -> None:
         """CMS 有 5 分钟最小间隔；间隔内来的触发先攒着，这里每轮检查一次到点补发"""
@@ -881,6 +894,7 @@ class Worker:
         """
         cfg = get_settings()
         if not cfg.get("tr_enabled"):
+            self._clear_stale_missing()
             return
         data = self._tr_rpc(
             "torrent-get",

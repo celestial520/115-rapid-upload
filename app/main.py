@@ -27,7 +27,7 @@ TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
 
 # 版本号：页面右上角会显示，用来确认容器是否真的更新了
-APP_VERSION = "1.3"
+APP_VERSION = "1.3.1"
 
 load_settings()
 auth = Auth()
