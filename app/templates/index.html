@@ -303,7 +303,14 @@
       <label class="f"><span>密码</span><input type="password" id="tr_password" placeholder="留空则不修改"></label>
       <label class="f"><span>查询间隔（秒）</span><input type="number" id="tr_poll_sec">
         <span class="muted">只是问一下下载器状态，不碰硬盘，30 秒足够</span></label>
+      <div class="check" style="grid-column:1/-1">
+        <input type="checkbox" id="tr_remove_after_done">
+        <label for="tr_remove_after_done">整个种子秒传完成后，自动从下载器移除种子</label>
+      </div>
+      <label class="f"><span>移除延迟（秒）</span><input type="number" id="tr_remove_delay_sec" min="0" max="86400" step="1" placeholder="300">
+        <span class="muted">等种子里<b>所有文件</b>都秒传成功且源文件已删除才开始计时，到点把种子从 TR 列表移除（不动其他数据）。有文件"保留源文件"时不移除</span></label>
     </div>
+    <div id="removeTip" class="muted" style="margin-top:8px"></div>
     <div class="muted" style="margin:12px 0 6px">路径映射：下载器里的路径 → 本容器里能看到的路径</div>
     <div class="task-head" style="grid-template-columns:1.6fr 1.6fr auto">
       <span>下载器内路径</span><span>本容器路径</span><span></span>
@@ -512,6 +519,17 @@ async function refresh(){
           + (s.tr_last_poll ? ' · 上次查询 ' + s.tr_last_poll : '');
       }else{
         $('trTip').textContent = '未连接：' + (s.tr_error || '检查地址/账号');
+      }
+    }
+
+    if($('removeTip')){
+      const rm = s.tr_remove || {};
+      if(!s.tr_enabled || !$('tr_remove_after_done') || !$('tr_remove_after_done').checked){
+        $('removeTip').textContent = '';
+      }else if(rm.pending){
+        $('removeTip').textContent = `待移除种子 ${rm.pending} 个：${rm.next}`;
+      }else{
+        $('removeTip').textContent = rm.removed ? `已累计移除 ${rm.removed} 个种子（本地无待移除）` : '';
       }
     }
 

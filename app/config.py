@@ -67,6 +67,10 @@ DEFAULTS: Dict[str, Any] = {
     # 路径映射：下载器里的路径 -> 本容器里能看到的路径
     # [{"from": "/downloads", "to": "/watch"}]
     "tr_path_map": [],
+    # 整个种子秒传完成后，延迟一段时间把这个种子从下载器列表里删掉。
+    # 本地文件已经被助手删了，种子留在列表里只会因为"找不到文件"变成错误态
+    "tr_remove_after_done": True,
+    "tr_remove_delay_sec": 300,       # 延迟多少秒再删（给做种/校验留缓冲）
     # ---- 企业微信通知 ----
     "wecom_enabled": False,
     "wecom_corpid": "",
@@ -145,6 +149,7 @@ _BOOL_FIELDS = {
     "cleanup_enabled",
     "notify_on_hold",
     "tr_enabled",
+    "tr_remove_after_done",
     "wecom_enabled",
     "cms_enabled",
 }
@@ -156,6 +161,7 @@ _INT_FIELDS = {
     "max_files_per_run": (1, 500),
     "upload_delay_sec": (0, 300),
     "risk_cooldown_min": (0, 1440),
+    "tr_remove_delay_sec": (0, 86400),
 }
 _URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
 _STR_FIELDS = {

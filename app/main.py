@@ -27,7 +27,7 @@ TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
 
 # 版本号：页面右上角会显示，用来确认容器是否真的更新了
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4"
 
 load_settings()
 auth = Auth()
@@ -263,6 +263,17 @@ def api_status() -> Dict[str, Any]:
             "remain": int(worker._risk_remain()),
             "count": int(worker.risk_state.get("count") or 0),
             "last": worker.risk_state.get("last") or "",
+        },
+        "tr_remove": {
+            "pending": len(worker._tr_remove_queue),
+            "removed": int(worker.tr_state.get("removed") or 0),
+            "next": min(
+                (
+                    f"{v.get('name')}（{max(0, int(float(v.get('due') or 0) - time.time()))} 秒后）"
+                    for v in worker._tr_remove_queue.values()
+                ),
+                default="",
+            ),
         },
     }
 

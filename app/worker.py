@@ -85,6 +85,13 @@ class Worker:
         self.last_run_at: float = float(self.state.get("last_run") or 0)
         self.last_results: List[Dict[str, Any]] = list(self.state.get("last_results") or [])
         self.last_error: str = ""
+        # 种子秒传完成后延迟删除：hash -> {"name":..., "due": 时间戳, "files": n}
+        # 落盘在 state["tr_remove"]，重启不清零
+        self._tr_remove_queue: Dict[str, Any] = dict(self.state.get("tr_remove") or {})
+        # 本轮种子处理进度：hash -> {"name":..., "total": n, "done": n}
+        self._tr_progress: Dict[str, Any] = {}
+        # 文件路径 -> 所属种子 hash（判断"整个种子传完"用）
+        self._tr_file_hash: Dict[str, str] = {}
         # 115 风控冷却：命中 429/405 后暂停上传，到点自动恢复（落盘，重启不清零）
         self.risk_state: Dict[str, Any] = dict(self.state.get("risk") or {})
         self.risk_state.setdefault("until", 0.0)
@@ -176,6 +183,7 @@ class Worker:
                     self._maybe_daily_scan(cfg)
                     self._maybe_cleanup(cfg)
                     self._flush_notifications()
+                    self._flush_torrent_removals()
             except Exception as err:  # 任何异常都不能让线程退出
                 self.last_error = str(err)
                 logger.warning(f"[worker] 本轮出错：{err}")
@@ -185,6 +193,70 @@ class Worker:
         """下载器关闭后清掉残留的路径映射警告，避免页面上一直挂着历史错误"""
         if self.tr_state.get("missing"):
             self.tr_state["missing"] = {}
+
+    # ---------------------------------------------------------------- 种子延迟删除
+
+    def _queue_torrent_removal(self, torrent_hash: str, progress: Dict[str, Any]) -> None:
+        """整个种子都秒传完成且本地文件已删：延迟一段时间后从下载器移除"""
+        cfg = get_settings()
+        if not cfg.get("tr_remove_after_done"):
+            return
+        delay = max(0, min(86400, int(cfg.get("tr_remove_delay_sec") or 0)))
+        name = str(progress.get("name") or "")
+        self._tr_remove_queue[torrent_hash] = {
+            "name": name,
+            "due": time.time() + delay,
+            "files": int(progress.get("total") or 0),
+        }
+        self.state["tr_remove"] = self._tr_remove_queue
+        self._persist()
+        logger.info(f"[worker] 种子已全部秒传并删除本地文件，{delay} 秒后从下载器移除：{name}")
+
+    def _flush_torrent_removals(self) -> None:
+        """到点的种子调 torrent-remove；不删本地数据（本地已经由助手处理过）"""
+        cfg = get_settings()
+        if not cfg.get("tr_enabled") or not cfg.get("tr_remove_after_done"):
+            return
+        if not self._tr_remove_queue:
+            return
+        now = time.time()
+        for torrent_hash, info in list(self._tr_remove_queue.items()):
+            if float((info or {}).get("due") or 0) > now:
+                continue
+            name = str((info or {}).get("name") or torrent_hash[:8])
+            data = self._tr_rpc(
+                "torrent-remove",
+                {"ids": [torrent_hash], "delete-local-data": False},
+            )
+            ok = bool(data) and str(data.get("result") or "") == "success"
+            if ok:
+                self._tr_remove_queue.pop(torrent_hash, None)
+                self.tr_state["removed"] = int(self.tr_state.get("removed") or 0) + 1
+                logger.info(f"[worker] 已从下载器移除种子：{name}")
+            else:
+                info["due"] = now + 60   # 失败 1 分钟后再试
+                logger.warning(f"[worker] 移除种子失败，1 分钟后再试：{name}")
+        self.state["tr_remove"] = self._tr_remove_queue
+        self._persist()
+
+    def _mark_tr_file_done(self, path: Path, item: Dict[str, Any]) -> None:
+        """某个种子里的一个文件处理完了：累计进度，全齐了就排进删除队列"""
+        try:
+            torrent_hash = self._tr_file_hash.get(path.as_posix())
+        except Exception:
+            return
+        if not torrent_hash:
+            return
+        progress = self._tr_progress.get(torrent_hash)
+        if not progress:
+            return
+        progress["done"] = int(progress.get("done") or 0) + 1
+        # 有任何一个文件保留了源文件（要做种），就不动这个种子
+        if not item.get("local_deleted"):
+            progress["keep"] = True
+        if progress["done"] >= int(progress.get("total") or 0) and not progress.get("keep"):
+            self._tr_progress.pop(torrent_hash, None)
+            self._queue_torrent_removal(torrent_hash, progress)
 
     def _flush_notifications(self) -> None:
         """CMS 有 5 分钟最小间隔；间隔内来的触发先攒着，这里每轮检查一次到点补发"""
@@ -467,6 +539,9 @@ class Worker:
                         )
                         self._log_item(task, item)
                         results.append(item)
+                        # 种子里的这个文件处理完了，累计进度（整种子齐了才排删除）
+                        if item.get("status") == "成功" and source == "tr":
+                            self._mark_tr_file_done(path, item)
                     self._persist()
 
             if skipped:
@@ -546,6 +621,7 @@ class Worker:
                     "source": source,
                     "status": "成功",
                     "size": fmt_size(size),
+                    "local_deleted": deleted,
                     "note": "网盘已有同名文件，"
                     + ("已删除源文件" if deleted else "保留源文件"),
                 }
@@ -581,6 +657,7 @@ class Worker:
                 "source": source,
                 "status": "成功",
                 "size": fmt_size(size),
+                "local_deleted": deleted,
                 "note": "已复制到网盘，已删除源文件" if deleted else "已复制到网盘，保留源文件",
             }
 
@@ -602,6 +679,7 @@ class Worker:
                         "source": source,
                         "status": "成功",
                         "size": fmt_size(size),
+                        "local_deleted": deleted,
                         "note": "真实上传完成，已删除源文件"
                         if deleted
                         else "真实上传完成，保留源文件",
@@ -997,6 +1075,13 @@ class Worker:
                     for item in items:
                         self._forced[task_id][item.as_posix()] = item
                         self._forced_src[item.as_posix()] = "tr"
+                        # 记住这个文件属于哪个种子，处理完才能判断"整种子是否都传完"
+                        self._tr_file_hash[item.as_posix()] = torrent_hash
+            self._tr_progress[torrent_hash] = {
+                "name": name,
+                "total": len(files),
+                "done": 0,
+            }
             missing.pop(torrent_hash, None)
             done_map[torrent_hash] = time.time()
             self.tr_state["completed"] = int(self.tr_state.get("completed") or 0) + 1
