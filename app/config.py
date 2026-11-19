@@ -53,6 +53,9 @@ DEFAULTS: Dict[str, Any] = {
     # 每天固定时间全量扫一次（处理"从别处移进来"的文件，也顺手重试之前失败的文件）
     "daily_scan_enabled": True,
     "daily_scan_time": "09:00",
+    # 被拦截（115 上还秒传不了）的文件，隔多久重新核实一次能否秒传。
+    # 0 = 关闭，只在每日扫描时重试
+    "retry_check_min": 120,
     # ---- 空目录清理 ----
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
@@ -162,6 +165,7 @@ _INT_FIELDS = {
     "upload_delay_sec": (0, 300),
     "risk_cooldown_min": (0, 1440),
     "tr_remove_delay_sec": (0, 86400),
+    "retry_check_min": (0, 10080),
 }
 _URL_FIELDS = {"tr_url", "cms_domain", "wecom_proxy"}
 _STR_FIELDS = {

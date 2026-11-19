@@ -281,7 +281,12 @@
       <div class="check"><input type="checkbox" id="daily_scan_enabled"><label for="daily_scan_enabled">每天定时全量扫描一次</label></div>
       <label class="f"><span>每天几点扫描</span><input type="time" id="daily_scan_time">
         <span class="muted">扫一遍监控目录，处理从别处移进来的文件；也顺手重试上次失败的</span></label>
+      <label class="f" style="grid-column:1/-1"><span>秒传重试间隔（分钟）</span>
+        <input type="number" id="retry_check_min" min="0" max="10080" step="1" placeholder="120" style="max-width:150px">
+        <span class="muted">被拦截（115 上还没有这个文件）的，隔这么久重新核实一次能否秒传。
+          填 0 关闭，只在每日扫描时重试</span></label>
     </div>
+    <div id="retryTip" class="muted" style="margin-top:8px"></div>
 
     <div class="divider"></div>
     <h3>监控任务（本地目录 → 115 目录，可加多个）</h3>
@@ -520,6 +525,14 @@ async function refresh(){
       }else{
         $('trTip').textContent = '未连接：' + (s.tr_error || '检查地址/账号');
       }
+    }
+
+    if($('retryTip')){
+      const n = s.held_count || 0;
+      const m = s.retry_check_min || 0;
+      $('retryTip').textContent = n
+        ? `当前 ${n} 个文件被拦截${m > 0 ? `，每隔 ${m} 分钟自动核实一次` : '，只在每日扫描时重试'}`
+        : (m > 0 ? `没有待重试的文件（间隔 ${m} 分钟）` : '');
     }
 
     if($('removeTip')){

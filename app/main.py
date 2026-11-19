@@ -27,7 +27,7 @@ TEMPLATE = BASE_DIR / "templates" / "index.html"
 LOGIN_TEMPLATE = BASE_DIR / "templates" / "login.html"
 
 # 版本号：页面右上角会显示，用来确认容器是否真的更新了
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 
 load_settings()
 auth = Auth()
@@ -215,6 +215,14 @@ def api_status() -> Dict[str, Any]:
         "delete_source": bool(cfg.get("delete_source", True)),
         "daily_scan_enabled": bool(cfg.get("daily_scan_enabled", True)),
         "daily_scan_time": cfg.get("daily_scan_time"),
+        "retry_check_min": int(cfg.get("retry_check_min") or 0),
+        "held_count": len(
+            [
+                v
+                for v in (worker.state.get("files") or {}).values()
+                if (v or {}).get("status") == "held"
+            ]
+        ),
         "last_daily_scan": worker.state.get("last_daily_scan") or "",
         "cleanup_enabled": cfg.get("cleanup_enabled"),
         "cleanup_time": cfg.get("cleanup_time"),

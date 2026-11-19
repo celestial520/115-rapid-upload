@@ -181,6 +181,7 @@ class Worker:
                             logger.info(f"[worker] {label}，立即处理 {detail}")
                             self.run_once(skip_stable=True, event_files=buckets, source=src)
                     self._maybe_daily_scan(cfg)
+                    self._maybe_retry_held(cfg)
                     self._maybe_cleanup(cfg)
                     self._flush_notifications()
                     self._flush_torrent_removals()
@@ -193,6 +194,50 @@ class Worker:
         """下载器关闭后清掉残留的路径映射警告，避免页面上一直挂着历史错误"""
         if self.tr_state.get("missing"):
             self.tr_state["missing"] = {}
+
+    def _maybe_retry_held(self, cfg: Dict[str, Any]) -> None:
+        """
+        到了「秒传重试间隔」就把之前被拦截的文件重新核实一次：
+        115 上的内容什么时候齐不好说，不用等到第二天。
+        """
+        minutes = int(cfg.get("retry_check_min") or 0)
+        if minutes <= 0:
+            return
+        now = time.time()
+        last = float(self.state.get("last_held_retry") or 0)
+        if now - last < minutes * 60:
+            return
+
+        # 找出到点的 held 记录，按任务分桶（key 形如 task_id|相对路径）
+        buckets: Dict[str, List[Path]] = {}
+        for key, record in (self.state.get("files") or {}).items():
+            record = record or {}
+            if record.get("status") != "held":
+                continue
+            held_at = float(record.get("held_at") or record.get("last_try") or 0)
+            if held_at and now - held_at < minutes * 60:
+                continue
+            task_id, _, rel = str(key).partition("|")
+            task = next(
+                (t for t in self._enabled_tasks(cfg) if str(t.get("id") or "default") == task_id),
+                None,
+            )
+            if not task or not rel:
+                continue
+            path = Path(str(task.get("watch_dir"))).expanduser() / rel
+            try:
+                if path.exists() and path.is_file():
+                    buckets.setdefault(task_id, []).append(path)
+            except OSError:
+                continue
+
+        self.state["last_held_retry"] = now
+        self._persist()
+        if not buckets:
+            return
+        total = sum(len(v) for v in buckets.values())
+        logger.info(f"[worker] 到点重新核实 {total} 个被拦截的文件能否秒传")
+        self.run_once(skip_stable=True, event_files=buckets, source="retry")
 
     # ---------------------------------------------------------------- 种子延迟删除
 
@@ -556,8 +601,12 @@ class Worker:
             self.state["last_results"] = self.last_results
             self._persist()
 
-            if results:
-                for err in notify_batch(results):
+            # 定时重试只报"这次终于成功了"的，否则每轮都发一条失败通知会刷屏
+            notify_items = results
+            if source == "retry":
+                notify_items = [r for r in results if r.get("status") == "成功"]
+            if notify_items:
+                for err in notify_batch(notify_items):
                     self.last_error = err
                     logger.warning(f"[worker] 通知失败：{err}")
         finally:
@@ -696,16 +745,22 @@ class Worker:
                     "note": f"真实上传失败：{upload_detail}",
                 }
 
-            scan_time = str(cfg.get("daily_scan_time") or "09:00")
             record["status"] = "held"
             record["note"] = detail
+            record["held_at"] = time.time()
+            retry_min = int(cfg.get("retry_check_min") or 0)
+            when = (
+                f"{retry_min} 分钟后自动核实"
+                if retry_min > 0
+                else f"明天 {str(cfg.get('daily_scan_time') or '09:00')} 扫描时再试"
+            )
             return {
                 "file": rel_posix,
                 "task": task.get("name") or "",
                 "source": source,
                 "status": "拦截",
                 "size": fmt_size(size),
-                "note": f"暂不能秒传，明天 {scan_time} 扫描时再试",
+                "note": f"暂不能秒传，{when}",
             }
 
         record["note"] = detail
@@ -1032,15 +1087,48 @@ class Worker:
             path = self._resolve_download_path(torrent, cfg)
             name = str(torrent.get("name") or "")
             if not path or not path.exists():
+                # 两种"找不到"要分开处理，否则会把"文件已被移走"错报成"映射配错"：
+                #   1) 映射后的父目录存在 → 映射是通的，只是这个种子的内容不在了
+                #      （MP 整理移走 / 秒传后删了源文件 / 手动删了），是残留种子
+                #   2) 父目录也不存在 → 真的是路径映射配错
+                parent_ok = False
+                if path:
+                    try:
+                        parent_ok = Path(path).parent.exists()
+                    except OSError:
+                        parent_ok = False
+                if parent_ok:
+                    stale = self.tr_state.setdefault("stale", {})
+                    if torrent_hash not in stale:
+                        stale[torrent_hash] = {
+                            "name": name,
+                            "path": str(path),
+                            "at": time.strftime("%m-%d %H:%M"),
+                        }
+                        logger.info(
+                            f"[worker] 种子内容已不存在（文件被移走或已秒传删除），忽略：{name}"
+                        )
+                        # 开了自动清理就顺手把这个残留种子从下载器移除
+                        if cfg.get("tr_remove_after_done"):
+                            self._queue_torrent_removal(
+                                torrent_hash, {"name": name, "total": 0}
+                            )
+                    missing.pop(torrent_hash, None)
+                    done_map[torrent_hash] = time.time()
+                    self._persist()
+                    continue
                 if torrent_hash not in missing:
                     missing[torrent_hash] = {
                         "name": name,
                         "path": str(path or ""),
-                        "reason": "本地找不到，检查下载器的路径映射",
+                        "reason": (
+                            f"找不到 {path}，它所在的上级目录也不存在，"
+                            "检查「路径映射」里「本容器路径」是否写对"
+                        ),
                         "at": time.strftime("%m-%d %H:%M"),
                     }
                     logger.info(
-                        f"[worker] 下载已完成但本地找不到：{name} -> {path}（检查路径映射）"
+                        f"[worker] 下载已完成但路径映射指向的目录不存在：{name} -> {path}"
                     )
                 continue
             files = self._files_from_torrent(path, cfg)
@@ -1200,6 +1288,10 @@ class Worker:
             missing_tr = self.tr_state.get("missing")
             if isinstance(missing_tr, dict) and len(missing_tr) > 200:
                 self.tr_state["missing"] = dict(list(missing_tr.items())[-100:])
+            # 残留种子列表同理，只留最近 200 条
+            stale_tr = self.tr_state.get("stale")
+            if isinstance(stale_tr, dict) and len(stale_tr) > 200:
+                self.tr_state["stale"] = dict(list(stale_tr.items())[-100:])
             files = self.state.get("files") or {}
             if len(files) > 2000:
                 keep = sorted(
@@ -1230,7 +1322,17 @@ class Worker:
             done_at = float(value.get("done_at") or 0)
             next_text = ""
             if value.get("status") == "held":
-                next_text = "每天 " + str(cfg.get("daily_scan_time") or "09:00")
+                retry_min = int(cfg.get("retry_check_min") or 0)
+                if retry_min > 0:
+                    held_at = float(value.get("held_at") or value.get("last_try") or 0)
+                    due = held_at + retry_min * 60
+                    next_text = (
+                        time.strftime("%m-%d %H:%M", time.localtime(due))
+                        if due > time.time()
+                        else "即将重试"
+                    )
+                else:
+                    next_text = "每天 " + str(cfg.get("daily_scan_time") or "09:00")
             task_id, _, rel = key.partition("|")
             rows.append(
                 {
